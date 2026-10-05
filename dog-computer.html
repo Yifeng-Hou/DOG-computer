@@ -1,0 +1,1869 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DOG 计算机仿真器</title>
+<style>
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;background:#c0c0c0;color:#000;
+    font:13px/1.4 Tahoma,Arial,"Microsoft YaHei",sans-serif;}
+  #app{display:grid;grid-template-rows:auto 1fr;height:100vh;}
+  header{display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:6px 8px;background:#c0c0c0;}
+  header h1{margin:0;font-size:26px;font-weight:bold}
+  header .tag{font-size:14px;background:#fff;border:1px solid #808080;padding:2px 8px}
+  .btn{background:#c0c0c0;color:#000;border:2px outset #fff;padding:4px 10px;cursor:pointer;font-size:12px;}
+  .btn:active{border-style:inset}
+  .led{width:12px;height:12px;display:inline-block;background:#808080;border:1px inset #fff}
+  .led.on{background:#0a0}
+  .led.busy{background:#fa0}
+  #main{display:grid;grid-template-columns:340px 1fr 360px;gap:6px;padding:6px;min-height:0;overflow:hidden;}
+  .col{display:flex;flex-direction:column;gap:6px;min-height:0;overflow:auto}
+  .card{background:#c0c0c0;border:2px outset #fff;padding:6px}
+  .card h3{margin:0 0 4px;font-size:12px;display:flex;align-items:center;justify-content:space-between}
+  #topo svg{width:100%;height:auto;display:block;background:#fff}
+  .tnode{fill:#e0e0e0;stroke:#404040;stroke-width:1}
+  .tlabel{fill:#000;font-size:11px;text-anchor:middle}
+  .tsub{fill:#404040;font-size:9px;text-anchor:middle}
+  .tlink{stroke:#404040;stroke-width:1;fill:none;marker-end:url(#arr)}
+  .tlink.live{stroke:#00f;stroke-width:2}
+  .tnode.live{stroke:#00a000;stroke-width:2}
+  .keyboard{background:#c0c0c0;border:2px inset #fff;padding:4px;display:flex;flex-direction:column;gap:4px}
+  .keyboard input{width:100%;background:#fff;color:#000;border:2px inset #808080;
+    padding:5px;font:14px "Courier New",monospace;outline:none}
+  .kbdhint{color:#404040;font-size:11px}
+  #queue{display:flex;flex-wrap:wrap;gap:2px;min-height:20px;align-items:center}
+  .qcell{background:#fff;border:1px solid #000;font:11px "Courier New",monospace;padding:1px 4px}
+  .qcell.ctrl{background:#ffd}
+  #regs{display:grid;grid-template-columns:repeat(3,1fr);gap:1px;font:11px "Courier New",monospace}
+  #regs .r{padding:0 3px;color:#000}
+  #regs .r.changed{background:#ffd}
+  #monitor-wrap{display:flex;flex-direction:column;align-items:center;gap:4px;min-height:0}
+  #monitor{background:#000;border:3px solid #404040;image-rendering:pixelated;max-width:100%;height:auto}
+  .statusline{display:flex;gap:10px;flex-wrap:wrap;justify-content:center;color:#404040;font-size:11px}
+  .statusline b{color:#000}
+  #memview{display:flex;flex-direction:column;gap:4px}
+  canvas.mem{width:100%;background:#000;border:2px inset #fff;display:block}
+  #legend{display:flex;flex-wrap:wrap;gap:2px 8px;font-size:10px;color:#000}
+  #legend i{display:inline-block;width:10px;height:10px;vertical-align:-1px;margin-right:2px;border:1px solid #000}
+  .slice{background:#fff;border:1px solid #000;padding:4px;font:11px "Courier New",monospace;max-height:90px;overflow:auto}
+  .hint{color:#404040;font-size:11px}
+  details{color:#404040} details summary{cursor:pointer;color:#000}
+  @media (max-width:1100px){ #main{grid-template-columns:1fr;grid-template-rows:auto auto auto} }
+</style>
+</head>
+<body>
+<div id="app">
+  <header>
+    <h1>DOG计算机</h1>
+    <span class="tag">wang~wang~</span>
+    <button class="btn primary" id="btnPower">上电</button>
+    <button class="btn" id="btnRun">运行</button>
+    <button class="btn" id="btnStep">单步</button>
+    <button class="btn danger" id="btnReset">复位</button>
+    <label style="color:#404040;font-size:11px">速度
+      <input id="speed" type="range" min="0" max="3" step="1" value="2"></label>
+    <span id="speedLabel" style="color:#404040;font-size:11px;min-width:60px"></span>
+    <span style="margin-left:auto;display:flex;align-items:center;gap:6px;font-size:11px;color:#404040">
+      PC <b id="clock" style="color:#000">0x00000000</b> · 已执行 <b id="inscount">0</b> 条
+      <span id="powerLed" class="led"></span> 电源
+    </span>
+  </header>
+
+  <div id="main">
+    <!-- 左列：拓扑 / 键盘 / 中断 / 寄存器 -->
+    <div class="col">
+      <div class="card" id="topo">
+        <h3>计算机拓扑 <span class="hint">信号沿连线流动</span></h3>
+        <svg id="topoSvg" viewBox="0 0 320 300" width="320" height="300"></svg>
+      </div>
+      <div class="card">
+        <h3>键盘（输入设备）</h3>
+        <div class="keyboard">
+          <input id="kbd" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"
+            placeholder="点这里，直接敲键盘…">
+          <div class="kbdhint">可输入 ASCII 字符；回车 / 退格 / Esc / 方向键 / PgUp / PgDn 均为控制键</div>
+        </div>
+      </div>
+      <div class="card">
+        <h3>中断处理器（串口 → 队列）</h3>
+        <div id="queue"></div>
+        <div class="statusline" style="margin-top:4px">
+          中断信号 <span id="irqLed" class="led"></span>
+          队首 <b id="qHead">-</b> 队尾 <b id="qTail">-</b>
+        </div>
+      </div>
+      <div class="card">
+        <h3>微处理器 · 寄存器组</h3>
+        <div id="regs"></div>
+        <div class="statusline" style="margin-top:5px;flex-direction:column;gap:2px">
+          <div>PC <b id="pc">0x00000000</b> · 当前指令 <b id="curIns">—</b></div>
+          <div>栈顶 SP <b id="sp">0x00009000</b></div>
+          <div>光标 <b id="curpos">0</b> · 模式地址 <b id="modeaddr">shell</b> · 显示零位 <b id="dispzero">0</b></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 中列：显示器 -->
+    <div class="col">
+      <div class="card" id="monitor-wrap">
+        <h3 style="width:100%">显示器（64 列 × 25 行 · VRAM 直连）</h3>
+        <canvas id="monitor" width="640" height="450"></canvas>
+        <div class="statusline">
+          <span>模式 <b id="modeLabel">SHELL</b></span>
+          <span>文件 <b id="fileLabel">无</b></span>
+          <span>VRAM <b>0x1000–0x163F</b></span>
+        </div>
+      </div>
+      <div class="card">
+        <h3>切片表（文件模式）</h3>
+        <div class="slice" id="slices">—</div>
+        <div class="hint" style="margin-top:3px">shell 命令：CLEAR / FIND / RENAME / BUILD / DELETE / OPEN / CODE / RUN</div>
+      </div>
+      <div class="card">
+        <h3>命令与汇编速查</h3>
+        <details>
+          <summary>展开帮助</summary>
+          <div class="hint" style="white-space:pre-wrap">汇编左对齐，只含 RV32I 指令 + 系统函数：
+  ECALL start,end        显示内存 [start,end)
+  TRANS start,end,dst    批量搬数据 [start,end) → dst（不渲染）
+  PRINT reg              十进制显示寄存器（自带换行）
+  MUL / DIVU / REMU      软件整数乘除（rd, rs1, rs2）
+寄存器只有 x0-x31（也可写 0-31）：x1=返回地址，x2=栈，
+x27=系统返回地址，x10/x11=参数，其余按需使用。
+函数内部返回 JALR x0, x1, 0；main 返回 JALR x0, x27, 0；调用 JAL x1, label。
+编译：CODE 源文件 → C-源文件；运行：RUN C-源文件。</div>
+        </details>
+      </div>
+    </div>
+
+    <!-- 右列：存储读写观察窗 -->
+    <div class="col">
+      <div class="card" id="memview">
+        <h3>存储读写观察窗 <span class="hint">蓝=读 · 橙=写</span></h3>
+        <div id="legend">
+          <span><i style="background:#5b7bd5"></i>PROM/引导</span>
+          <span><i style="background:#2e7d5b"></i>VRAM</span>
+          <span><i style="background:#3f8fa0"></i>状态锁存</span>
+          <span><i style="background:#8a5bb5"></i>工作区</span>
+          <span><i style="background:#3a7ca5"></i>文本块</span>
+          <span><i style="background:#7d8c3a"></i>栈</span>
+          <span><i style="background:#b05aa0"></i>系统程序</span>
+          <span><i style="background:#b58a3a"></i>用户码/数据</span>
+          <span><i style="background:#556;opacity:.5"></i>保留</span>
+        </div>
+        <div class="hint">主存 RAM（64KB，按字节）</div>
+        <canvas id="ramCanvas" class="mem" width="640" height="192"></canvas>
+        <div class="hint">硬盘（4GB 寻址 · 4KB/扇区 · 共 1,048,560 扇区，图中展开前 256 扇区；0–1 为目录表）</div>
+        <canvas id="diskCanvas" class="mem" width="640" height="44"></canvas>
+        <div class="hint" id="memTip">把鼠标移到色块上查看地址</div>
+      </div>
+    </div>
+  </div>
+</div>
+<script>
+"use strict";
+// ===================== 常量 =====================
+const RAM_SIZE = 0x10000;               // 64KB 主存
+const ROM_BASE = 0x0000, ROM_SIZE = 0x1000, ROM_IMAGE = 0x0100;
+const VRAM_BASE = 0x1000, VRAM_SIZE = 0x0640;   // 25*64
+const STATUS_BASE = 0x1640;
+const STATUS_KEY = 0x1640, STATUS_CURSOR = 0x1644, STATUS_DISPZERO = 0x1648,
+      STATUS_MODE = 0x164C, STATUS_SP = 0x1650, LAST_KEY = 0x1654;
+const WORK_BASE = 0x2000, WORK_SIZE = 0x1000;
+const TEXT_BASE = 0x3000, TEXT_SIZE = 0x2000;
+const SLICE_BASE = 0x5000, SLICE_SIZE = 0x1000;
+const STACK_BASE = 0x8000, SP_INIT = 0x8FF0;
+const OS_BASE = 0x9000, OS_SIZE = 0x2000;
+let IDLE_ADDR = 0x9AC0;
+const CODE_BASE = 0xC000, CODE_SIZE = 0x4000;
+const DATA_BASE = 0xC000, DATA_SIZE = 0x4000;
+
+const DISK_BASE = 0x10000;
+const SECTOR_SIZE = 4096, SECTOR_COUNT = 0xFFFF0;   // 4GB-64KB 全部给硬盘，4KB/扇区
+const DIR_SECTORS = 2, DIR_ENTRY_SIZE = 32, DIR_MAX = Math.floor(DIR_SECTORS*SECTOR_SIZE/DIR_ENTRY_SIZE);
+const MAX_SECTORS_PER_FILE = 3;          // 每文件最多 3 个扇区（12KB），扇区号用 32 位存
+const DISK_VIEW_SECTORS = 256;           // 可视化只展开前 256 个扇区（文件系统活动区）
+
+const COLS = 64, ROWS = 25, CELL_W = 10, CELL_H = 18;
+
+// 控制键编码（非 ASCII）
+const KEY = {
+  ENTER:0x0D, BACK:0x08, ESC:0x1B, TAB:0x09,
+  LEFT:0x80, RIGHT:0x81, UP:0x82, DOWN:0x83, PGUP:0x84, PGDN:0x85
+};
+// 程序运行时的内存映射输入接口（程序轮询这些地址）
+const INPUT_FLAG = 0xE000, INPUT_LEN = 0xE004, INPUT_BUF = 0xE010;
+const MARKER = 0x3E;   // '>' 输入提示标记
+
+// ===================== 状态 =====================
+const ram = new Uint8Array(RAM_SIZE);
+const reg = new Int32Array(32);          // x0..x31（x0 恒 0）
+let pc = 0;
+let powered = false, running = false;
+let clockCount = 0;
+let mode = "shell";                      // 'shell' | 'file'
+let workspace = "";                      // shell 工作区文本（源）
+let fileContent = "";                    // 文件模式当前文本（源）
+let cursor = 0;                          // 相对文本起始的光标偏移
+let displayZero = 0;
+let currentFile = null;                  // 打开中的文件名
+let slices = [];                         // 切片表（展示用）
+let queue = [];                          // 中断处理器 FIFO
+let execMode = "idle";                   // 'boot' | 'idle' | 'intr' | 'user'
+let userExit = null;                     // 用户程序退出标志
+let intrReturn = IDLE_ADDR;              // 中断返回地址
+let userCodeEnd = CODE_BASE;
+let lastPC = -1, lastIns = "—";
+
+// 读写访问高亮：accessAge[i] 为最近访问的“时间戳”，accessType[i] 0=无 1=读 2=写
+const ramAge = new Uint32Array(RAM_SIZE);
+const ramType = new Uint8Array(RAM_SIZE);
+let accessClock = 0;
+let heatTick = 0;                 // 每帧 +1，用于存储高亮的“新鲜度”
+const HEAT_FRAMES = 30;            // 高亮持续约 30 帧
+let logMemEnabled = true;
+// 目录（内存镜像，同时持久化到磁盘 0/1 扇区）
+let directory = [];
+// 硬盘用稀疏存储：逻辑上覆盖 0x10000..0xFFFFFFFF（4G-64K），只给用到的扇区分配 4KB
+const diskSectors = new Map();           // 扇区号 -> Uint8Array(4096)
+const sectorUsed = new Uint8Array(SECTOR_COUNT);
+const sectorAge = new Uint32Array(SECTOR_COUNT);
+const sectorType = new Uint8Array(SECTOR_COUNT);
+
+// ===================== DOM =====================
+const $ = id => document.getElementById(id);
+const monitor = $("monitor"), mctx = monitor.getContext("2d");
+const ramCanvas = $("ramCanvas"), rctx = ramCanvas.getContext("2d");
+const diskCanvas = $("diskCanvas"), dctx = diskCanvas.getContext("2d");
+const regsEl = $("regs"), queueEl = $("queue");
+
+// ===================== 工具 =====================
+const hex = (v, n=8) => "0x" + (v>>>0).toString(16).toUpperCase().padStart(n,"0");
+const signExt = (v, bits) => (v << (32-bits)) >> (32-bits);
+const toInt32 = v => v|0;
+const clamp = (v,a,b) => Math.max(a, Math.min(b, v));
+function ascii(code){ return (code>=0x20 && code<=0x7e) ? String.fromCharCode(code) : ""; }
+function isControl(code){ return code>=0x80 || code===KEY.ENTER || code===KEY.BACK || code===KEY.ESC; }
+
+function logMem(kind, msg){ /* 日志已移除 */ }
+function fmtChar(b){ const c = ascii(b); return c ? "'"+c+"'" : ""; }
+
+// ===================== 存储读写（含高亮与日志） =====================
+function isRAM(a){ a=a>>>0; return a<RAM_SIZE; }
+function isDisk(a){ a=a>>>0; return a>=DISK_BASE && a<0x100000000; }
+function diskSectorIndex(a){ a=a>>>0; const o=a-DISK_BASE; if(o<0) return -1; const s=Math.floor(o/SECTOR_SIZE); return s<SECTOR_COUNT?s:-1; }
+function getSectorBuf(s){ let b=diskSectors.get(s); if(!b){ b=new Uint8Array(SECTOR_SIZE); diskSectors.set(s,b); } return b; }
+
+function readByte(a){
+  let v, u=a>>>0;
+  if(isRAM(u)){ v = ram[u]; ramAge[u]=heatTick; ramType[u]=1;
+    if(logMemEnabled) logMem("rd", `读 RAM[${hex(u)}] = ${hex(v,2)}${fmtChar(v)}`); }
+  else { const s=diskSectorIndex(u); if(s>=0){ const o=u-DISK_BASE-s*SECTOR_SIZE; v=getSectorBuf(s)[o]; sectorAge[s]=heatTick; sectorType[s]=1;
+    if(logMemEnabled) logMem("rd", `读 盘[${hex(u)} → 扇区${s}] = ${hex(v,2)}${fmtChar(v)}`); }
+  else { v=0; logMem("err", `读越界地址 ${hex(a)}（返回0）`); }
+  }
+  return v;
+}
+function writeByte(a, v){
+  v = v & 0xff; const u=a>>>0;
+  if(isRAM(u)){ ram[u]=v; ramAge[u]=heatTick; ramType[u]=2;
+    if(logMemEnabled) logMem("wr", `写 RAM[${hex(u)}] = ${hex(v,2)}${fmtChar(v)}`); }
+  else { const s=diskSectorIndex(u); if(s>=0){ const o=u-DISK_BASE-s*SECTOR_SIZE; getSectorBuf(s)[o]=v; sectorAge[s]=heatTick; sectorType[s]=2;
+    if(logMemEnabled) logMem("wr", `写 盘[${hex(u)} → 扇区${s}] = ${hex(v,2)}${fmtChar(v)}`); }
+  else logMem("err", `写越界地址 ${hex(a)}（忽略）`);
+  }
+}
+function readWord(a){
+  return (readByte(a)) | (readByte(a+1)<<8) | (readByte(a+2)<<16) | (readByte(a+3)<<24) | 0;
+}
+function writeWord(a, v){
+  writeByte(a, v&0xff); writeByte(a+1,(v>>>8)&0xff);
+  writeByte(a+2,(v>>>16)&0xff); writeByte(a+3,(v>>>24)&0xff);
+}
+// 批量写入（用于整块渲染/搬移，减少逐字节日志但保留高亮）
+function writeBytesBulk(a, arr, silent=false){
+  for(let i=0;i<arr.length;i++){
+    const v=arr[i]&0xff, addr=a+i;
+    const u=addr>>>0;
+    if(isRAM(u)){ ram[u]=v; ramAge[u]=heatTick; ramType[u]=2; }
+    else { const s=diskSectorIndex(u); if(s>=0){ const o=u-DISK_BASE-s*SECTOR_SIZE; getSectorBuf(s)[o]=v; sectorAge[s]=heatTick; sectorType[s]=2; } }
+  }
+  if(!silent) logMem("wr", `批量写 ${hex(a>>>0)} 起 ${arr.length} 字节`);
+}
+
+function regionColor(a){
+  if(a>=ROM_BASE && a<ROM_BASE+ROM_SIZE) return "#5b7bd5";
+  if(a>=VRAM_BASE && a<VRAM_BASE+VRAM_SIZE) return "#2e7d5b";
+  if(a>=STATUS_BASE && a<WORK_BASE) return "#3f8fa0";
+  if(a>=WORK_BASE && a<WORK_BASE+WORK_SIZE) return "#8a5bb5";
+  if(a>=TEXT_BASE && a<TEXT_BASE+TEXT_SIZE) return "#3a7ca5";
+  if(a>=SLICE_BASE && a<SLICE_BASE+SLICE_SIZE) return "#2f5f6f";
+  if(a>=STACK_BASE && a<STACK_BASE+0x1000) return "#7d8c3a";
+  if(a>=OS_BASE && a<OS_BASE+OS_SIZE) return "#b05aa0";
+  if(a>=CODE_BASE && a<CODE_BASE+CODE_SIZE) return "#b58a3a";
+  return "#232b34";
+}
+
+// ===================== RV32I 解释器 =====================
+function fetchWord(a){
+  a = a >>> 0;
+  const v = ram[a] | (ram[a+1]<<8) | (ram[a+2]<<16) | (ram[a+3]<<24);
+  ramAge[a]=ramAge[a+1]=ramAge[a+2]=ramAge[a+3]=heatTick;
+  ramType[a]=ramType[a+1]=ramType[a+2]=ramType[a+3]=1;
+  return v|0;
+}
+function setReg(r, v){ if(r!==0) reg[r]=v|0; }
+
+function decodeName(inst){
+  const op=inst&0x7f, f3=(inst>>>12)&7, f7=(inst>>>25)&0x7f;
+  const rd=(inst>>>7)&0x1f, rs1=(inst>>>15)&0x1f, rs2=(inst>>>20)&0x1f;
+  const n={r:r=>"x"+r};
+  if(op===0x37) return `LUI x${rd}, ${hex(inst>>>0,8)}`;
+  if(op===0x17) return `AUIPC x${rd}, ${hex(inst>>>0,8)}`;
+  if(op===0x6f) return `JAL x${rd}`;
+  if(op===0x67) return `JALR x${rd}, x${rs1}`;
+  if(op===0x63){ const m={0:"BEQ",1:"BNE",4:"BLT",5:"BGE",6:"BLTU",7:"BGEU"}; return `${m[f3]} x${rs1}, x${rs2}`; }
+  if(op===0x03){ const m={0:"LB",1:"LH",2:"LW",4:"LBU",5:"LHU"}; return `${m[f3]} x${rd}, x${rs1}`; }
+  if(op===0x23){ const m={0:"SB",1:"SH",2:"SW"}; return `${m[f3]} x${rs2}, x${rs1}`; }
+  if(op===0x13){
+    const m={0:"ADDI",2:"SLTI",3:"SLTIU",4:"XORI",6:"ORI",7:"ANDI"};
+    if(f3===1) return `SLLI x${rd}, x${rs1}`;
+    if(f3===5) return (f7===0x20?"SRAI":"SRLI")+` x${rd}, x${rs1}`;
+    return `${m[f3]} x${rd}, x${rs1}`;
+  }
+  if(op===0x33){
+    if(f3===0) return (f7===0x20?"SUB":"ADD")+` x${rd}, x${rs1}, x${rs2}`;
+    const m={1:"SLL",2:"SLT",3:"SLTU",4:"XOR",6:"OR",7:"AND"};
+    if(f3===5) return (f7===0x20?"SRA":"SRL")+` x${rd}, x${rs1}, x${rs2}`;
+    return `${m[f3]} x${rd}, x${rs1}, x${rs2}`;
+  }
+  if(op===0x73) return inst===0x00100073 ? "EBREAK" : "ECALL";
+  if(op===0x0f) return "FENCE";
+  return "UNKNOWN";
+}
+
+function doEcall(){
+  const svc = reg[17];        // a7
+  const a0 = reg[10]>>>0, a1 = reg[11]>>>0, a2 = reg[12]>>>0;
+  if(svc===1){                    // 显示 [a0, a1)
+    for(let p=a0;p<a1;p++){
+      const b=readByte(p);
+      if(b===0x0a || (b>=32 && b<=126)){
+        workspace += (b===0x0a ? "\n" : String.fromCharCode(b));
+        // 边读边写：若源区与工作区重叠，后续会读到刚写下的内容（前向重叠复制）
+        if(WORK_BASE + workspace.length - 1 < WORK_BASE + WORK_SIZE){
+          writeByte(WORK_BASE + workspace.length - 1, b);
+        }
+      }
+    }
+    cursor = workspace.length;
+  }
+  else if(svc===2){               // 复制 [a0, a1) → a2
+    for(let p=a0;p<a1;p++) writeByte(a2+(p-a0), readByte(p));
+  }
+  else {
+    logMem("err", `未知 ECALL 服务号 a7=${svc}`);
+  }
+}
+
+function executeOne(){
+  logMemEnabled=false;
+  try{
+  const a = pc >>> 0;
+  const inst = fetchWord(a);
+  const op = inst & 0x7f;
+  const rd=(inst>>>7)&0x1f, f3=(inst>>>12)&7, rs1=(inst>>>15)&0x1f, rs2=(inst>>>20)&0x1f, f7=(inst>>>25)&0x7f;
+  let jumped = false;
+  let desc = decodeName(inst);
+  if(op===0x37){ setReg(rd, inst & 0xfffff000); }
+  else if(op===0x17){ setReg(rd, (pc + (inst & 0xfffff000))|0 ); }
+  else if(op===0x6f){ const imm=signExt(((inst>>>31)&1)<<20 | ((inst>>>12)&0xff)<<12 | ((inst>>>20)&1)<<11 | ((inst>>>21)&0x3ff)<<1, 21); if(rd) setReg(rd,(pc+4)>>>0); pc=((pc>>>0)+imm)>>>0; jumped=true; desc += " -> "+hex(pc); }
+  else if(op===0x67){ const imm=signExt(inst>>>20,12); const t=((reg[rs1]>>>0)+imm)&~1; if(rd) setReg(rd,(pc+4)>>>0); pc=t>>>0; jumped=true; desc += " -> "+hex(pc); }
+  else if(op===0x63){
+    const imm=signExt(((inst>>>31)&1)<<12 | ((inst>>>25)&0x3f)<<5 | ((inst>>>8)&0xf)<<1 | ((inst>>>7)&1)<<11, 13);
+    const x=reg[rs1], y=reg[rs2]; let take=false;
+    if(f3===0) take=(x===y); else if(f3===1) take=(x!==y);
+    else if(f3===4) take=(x<y); else if(f3===5) take=(x>=y);
+    else if(f3===6) take=((x>>>0)<(y>>>0)); else if(f3===7) take=((x>>>0)>=(y>>>0));
+    if(take){ pc=((pc>>>0)+imm)>>>0; jumped=true; desc += " -> "+hex(pc); }
+  }
+  else if(op===0x03){ const imm=signExt(inst>>>20,12); const addr=((reg[rs1]>>>0)+imm)>>>0;
+    if(f3===0) setReg(rd, signExt(readByte(addr),8));
+    else if(f3===1) setReg(rd, signExt(readByte(addr)|(readByte(addr+1)<<8),16));
+    else if(f3===2) setReg(rd, readWord(addr));
+    else if(f3===4) setReg(rd, readByte(addr));
+    else if(f3===5) setReg(rd, readByte(addr)|(readByte(addr+1)<<8));
+  }
+  else if(op===0x23){ const imm=signExt(((inst>>>25)<<5)|((inst>>>7)&0x1f),12); const addr=((reg[rs1]>>>0)+imm)>>>0; const v=reg[rs2];
+    if(f3===0) writeByte(addr, v);
+    else if(f3===1){ writeByte(addr,v); writeByte(addr+1,v>>>8); }
+    else if(f3===2) writeWord(addr, v);
+  }
+  else if(op===0x13){
+    const imm=signExt(inst>>>20,12);
+    if(f3===0) setReg(rd, (reg[rs1]+imm)|0);
+    else if(f3===2) setReg(rd, reg[rs1]<imm?1:0);
+    else if(f3===3) setReg(rd, (reg[rs1]>>>0)<(imm>>>0)?1:0);
+    else if(f3===4) setReg(rd, reg[rs1]^imm);
+    else if(f3===6) setReg(rd, reg[rs1]|imm);
+    else if(f3===7) setReg(rd, reg[rs1]&imm);
+    else if(f3===1) setReg(rd, (reg[rs1] << ((inst>>>20)&0x1f))|0);
+    else if(f3===5){ const sh=(inst>>>20)&0x1f; setReg(rd, f7===0x20 ? (reg[rs1]>>sh) : ((reg[rs1]>>>sh)|0)); }
+  }
+  else if(op===0x33){
+    const x=reg[rs1], y=reg[rs2];
+    if(f3===0) setReg(rd, f7===0x20 ? (x-y)|0 : (x+y)|0);
+    else if(f3===1) setReg(rd, (x<<(y&31))|0);
+    else if(f3===2) setReg(rd, x<y?1:0);
+    else if(f3===3) setReg(rd, (x>>>0)<(y>>>0)?1:0);
+    else if(f3===4) setReg(rd, x^y);
+    else if(f3===5) setReg(rd, f7===0x20 ? (x>>(y&31)) : ((x>>>(y&31))|0));
+    else if(f3===6) setReg(rd, x|y);
+    else if(f3===7) setReg(rd, x&y);
+  }
+  else if(op===0x73){ if(inst===0x00100073){ userExit="ebreak"; } else doEcall(); }
+  else if(op===0x0f){ /* FENCE：忽略 */ }
+  else { logMem("err", `无法识别指令 ${hex(inst,8)} @ ${hex(a)}`); userExit="bad"; }
+  if(!jumped) pc = (pc + 4) >>> 0;
+  lastIns = desc;
+  return desc;
+  }finally{ logMemEnabled=true; }
+}
+
+// ===================== RV32I 汇编器 =====================
+const ABI = {zero:0,ra:1,sp:2,gp:3,tp:4,fp:8,s0:8,s1:9,
+  a0:10,a1:11,a2:12,a3:13,a4:14,a5:15,a6:16,a7:17,
+  t0:5,t1:6,t2:7,t3:28,t4:29,t5:30,t6:31,
+  s2:18,s3:19,s4:20,s5:21,s6:22,s7:23,s8:24,s9:25,s10:26,s11:27};
+function regNum(tok){
+  if(tok==null) return null;
+  const t = tok.toLowerCase().replace(/^x/, "");
+  if(/^\d{1,2}$/.test(t)){ const n=+t; return n<=31?n:null; }
+  if(ABI[t]!==undefined) return ABI[t];
+  return null;
+}
+function stripComment(line){
+  let inq=null, out="";
+  for(let i=0;i<line.length;i++){
+    const c=line[i];
+    if(inq){ out+=c; if(c===inq) inq=null; continue; }
+    if(c==='"'||c==="'"){ inq=c; out+=c; continue; }
+    if(c==='#'||c===';') break;
+    out+=c;
+  }
+  return out;
+}
+function parseString(tok){
+  // 解析 "..." 字符串，支持 \n \t \\ \" \0
+  if(tok.length>=2 && ((tok[0]==='"'&&tok.at(-1)==='"')||(tok[0]==="'"&&tok.at(-1)==="'"))){
+    let s=tok.slice(1,-1), out="";
+    for(let i=0;i<s.length;i++){
+      if(s[i]==='\\' && i+1<s.length){ i++; const m={n:"\n",t:"\t",r:"\r",0:"\0","\\":"\\",'"':'"',"'":"'"}; out+= m[s[i]]!==undefined?m[s[i]]:s[i]; }
+      else out+=s[i];
+    }
+    return out;
+  }
+  return null;
+}
+function tokenize(line){
+  return line.replace(/,/g," ").trim().split(/\s+/).filter(Boolean);
+}
+function parseImmTok(tok, ctx){
+  if(tok==null) return null;
+  const t=tok.trim();
+  if(/^[-+]?0x[\da-fA-F]+$/.test(t)) return parseInt(t,16)|0;
+  if(/^[-+]?\d+$/.test(t)) return +t|0;
+  if((t[0]==="'"&&t.at(-1)==="'")||(t[0]==='"'&&t.at(-1)==='"')){ const s=parseString(t); return s? s.charCodeAt(0)|0 : null; }
+  if(ctx && ctx.sym && ctx.sym[t]!==undefined) return ctx.sym[t]|0;
+  return null;
+}
+function parseNum(tok){ const t=String(tok||"0").trim(); if(/^0x[\da-f]+$/i.test(t)) return parseInt(t,16)|0; return (+t)||0; }
+function splitImmReg(tok, ctx){
+  // 形如 12(x3) 或 x3,12（宽松）
+  const m = tok.match(/^(.+)\((\w+)\)$/);
+  if(m){ const imm=parseImmTok(m[1],ctx), r=regNum(m[2]); return {imm,r}; }
+  return null;
+}
+function hiLo(x){
+  const hi=(x+0x800)>>12, lo=(x-(hi<<12))|0;
+  return [hi,lo];
+}
+function isSigned12(x){ return x>=-2048 && x<=2047; }
+
+function packR(f7,rs2,rs1,f3,rd,op){ return ((f7&0x7f)<<25)|((rs2&31)<<20)|((rs1&31)<<15)|((f3&7)<<12)|((rd&31)<<7)|op; }
+function packI(imm,rs1,f3,rd,op){ return ((imm&0xfff)<<20)|((rs1&31)<<15)|((f3&7)<<12)|((rd&31)<<7)|op; }
+function packS(imm,rs2,rs1,f3,op){ imm&=0xfff; return (((imm>>5)&0x7f)<<25)|((rs2&31)<<20)|((rs1&31)<<15)|((f3&7)<<12)|((imm&0x1f)<<7)|op; }
+function packB(imm,rs2,rs1,f3,op){ const b=imm>>>0&0x1fff; return (((b>>12)&1)<<31)|(((b>>5)&0x3f)<<25)|((rs2&31)<<20)|((rs1&31)<<15)|((f3&7)<<12)|(((b>>1)&0xf)<<8)|(((b>>11)&1)<<7)|op; }
+function packU(imm20,rd,op){ return ((imm20&0xfffff)<<12)|((rd&31)<<7)|op; }
+function packJ(imm,rd,op){ const j=imm>>>0&0x1fffff; return (((j>>20)&1)<<31)|(((j>>1)&0x3ff)<<21)|(((j>>11)&1)<<20)|(((j>>12)&0xff)<<12)|((rd&31)<<7)|op; }
+
+const OPCODE={LUI:0x37,AUIPC:0x17,JAL:0x6f,JALR:0x67,BR:0x63,LOAD:0x03,STORE:0x23,OPI:0x13,OP:0x33,SYS:0x73};
+const BR={BEQ:0,BNE:1,BLT:4,BGE:5,BLTU:6,BGEU:7};
+const LOAD={LB:0,LH:1,LW:2,LBU:4,LHU:5};
+const STORE={SB:0,SH:1,SW:2};
+const OPI={ADDI:0,SLTI:2,SLTIU:3,XORI:4,ORI:6,ANDI:7};
+const OP={ADD:0,SUB:0,SLL:1,SLT:2,SLTU:3,XOR:4,OR:6,AND:7};
+
+function operandWords(tok){ return regNum(tok)!==null ? 1 : 2; }
+function emitLoad(out, tok, ctx, targetReg){
+  const r=regNum(tok);
+  if(r!==null){ out.push(packI(0, r, 0, targetReg, OPCODE.OPI)); return; } // ADDI target, r, 0
+  const imm=parseImmTok(tok, ctx); if(imm===null) throw new Error("无法解析 "+tok);
+  const [h,l]=hiLo(imm);
+  out.push(packU(h, targetReg, OPCODE.LUI));
+  out.push(packI(l, targetReg, 0, targetReg, OPCODE.OPI));
+}
+function countWords(tokens){
+  const m=tokens[0].toUpperCase();
+  if(m==="LI"){ const imm=parseImmTok(tokens[2],null); return (imm===null||!isSigned12(imm))?2:1; }
+  if(m==="LA"||m==="CALL") return 2;
+  if(m==="MUL"||m==="DIVU"||m==="REMU") return 9;
+  if(m==="ECALL") return tokens.length===1 ? 1 : operandWords(tokens[1]) + operandWords(tokens[2]) + 2;
+  if(m==="TRANS") return operandWords(tokens[1]) + operandWords(tokens[2]) + operandWords(tokens[3]) + 2;
+  if(m==="PRINT") return operandWords(tokens[1]) + 6;
+  return 1;
+}
+
+function emitInstruction(tokens, ctx){
+  const m=tokens[0].toUpperCase(), out=[];
+  const rd=regNum(tokens[1]), rs1=regNum(tokens[2]), rs2=regNum(tokens[3]);
+  const addr=ctx.addr;
+  const sym=ctx.sym;
+  const rel=(name)=>{ const t=sym[name]; if(t===undefined) return null; return (t-addr)>>>0; };
+  const need=(v,nm)=>{ if(v===null) throw new Error("无法解析 "+nm); return v; };
+
+  const isReal = OPCODE[m]!==undefined || BR[m]!==undefined || LOAD[m]!==undefined || STORE[m]!==undefined
+    || OPI[m]!==undefined || OP[m]!==undefined || m==="SLLI"||m==="SRLI"||m==="SRAI"||m==="SRL"||m==="SRA";
+  if(isReal){ // 真指令
+    if(m==="LUI") out.push(packU(need(parseImmTok(tokens[2],ctx),"LUI 立即数") & 0xfffff, need(rd,"rd"), OPCODE.LUI));
+    else if(m==="AUIPC") out.push(packU(need(parseImmTok(tokens[2],ctx),"AUIPC 立即数") & 0xfffff, need(rd,"rd"), OPCODE.AUIPC));
+    else if(m==="JAL") out.push(packJ(need(rel(tokens[2]),"JAL 目标"),rd||0,OPCODE.JAL));
+    else if(m==="JALR"){ const ir=splitImmReg(tokens[2],ctx);
+      if(ir) out.push(packI(need(ir.imm,"JALR 立即数"),need(ir.r,"rs1"),0,need(rd,"rd"),OPCODE.JALR));
+      else out.push(packI(need(parseImmTok(tokens[3],ctx),"JALR 立即数"),need(rs1,"rs1"),0,need(rd,"rd"),OPCODE.JALR)); }
+    else if(BR[m]!==undefined){ const off=need(rel(tokens[3]),"分支目标"); out.push(packB(off, need(regNum(tokens[2]),"rs2"), need(regNum(tokens[1]),"rs1"), BR[m], OPCODE.BR)); }
+    else if(LOAD[m]!==undefined){ const ir=splitImmReg(tokens[2],ctx); if(ir) out.push(packI(need(ir.imm,"偏移"),need(ir.r,"rs1"),LOAD[m],need(rd,"rd"),OPCODE.LOAD));
+      else out.push(packI(need(parseImmTok(tokens[3],ctx),"偏移"),need(rs1,"rs1"),LOAD[m],need(rd,"rd"),OPCODE.LOAD)); }
+    else if(STORE[m]!==undefined){ const val=need(regNum(tokens[1]),"rs2"); const ir=splitImmReg(tokens[2],ctx);
+      if(ir) out.push(packS(need(ir.imm,"偏移"), val, need(ir.r,"基址"), STORE[m], OPCODE.STORE));
+      else out.push(packS(need(parseImmTok(tokens[3],ctx),"偏移"), val, need(regNum(tokens[2]),"基址"), STORE[m], OPCODE.STORE)); }
+    else if(m==="ADDI"||m==="SLTI"||m==="SLTIU"||m==="XORI"||m==="ORI"||m==="ANDI") out.push(packI(need(parseImmTok(tokens[3],ctx),"立即数"),need(rs1,"rs1"),OPI[m],need(rd,"rd"),OPCODE.OPI));
+    else if(m==="SLLI"||m==="SRLI"||m==="SRAI"){ const shamt=need(parseImmTok(tokens[3],ctx),"移位数")&0x1f;
+      const f3=(m==="SLLI")?1:5, f7=(m==="SRAI")?0x20:0; out.push(packI((f7<<5)|shamt, need(rs1,"rs1"), f3, need(rd,"rd"), OPCODE.OPI)); }
+    else if(OP[m]!==undefined){ const f7=(m==="SUB")?0x20:(m==="SRA")?0x20:0; const f3=(m==="SRL"||m==="SRA")?5:OP[m]; out.push(packR(f7,need(rs2,"rs2"),need(rs1,"rs1"),f3,need(rd,"rd"),OPCODE.OP)); }
+    return out;
+  }
+
+  if(m==="NOP") out.push(packI(0,0,0,0,OPCODE.OPI));
+  else if(m==="ECALL"){ if(tokens.length===1){ out.push(0x00000073); }
+    else { emitLoad(out,tokens[1],ctx,10); emitLoad(out,tokens[2],ctx,11); out.push(packI(1,0,0,17,OPCODE.OPI)); out.push(0x00000073); } }
+  else if(m==="TRANS"){ emitLoad(out,tokens[1],ctx,10); emitLoad(out,tokens[2],ctx,11); emitLoad(out,tokens[3],ctx,12); out.push(packI(2,0,0,17,OPCODE.OPI)); out.push(0x00000073); }
+  else if(m==="PRINT"){ out.push(packI(-16,2,0,2,OPCODE.OPI)); out.push(packS(0,1,2,STORE.SW,OPCODE.STORE));
+    emitLoad(out,tokens[1],ctx,10); const a=sym["__os_print_int"]; if(a===undefined) throw new Error("缺系统例程 __os_print_int"); const [h,l]=hiLo(a);
+    out.push(packU(h,1,OPCODE.LUI)); out.push(packI(l,1,0,1,OPCODE.JALR)); out.push(packI(0,2,LOAD.LW,1,OPCODE.LOAD)); out.push(packI(16,2,0,2,OPCODE.OPI)); }
+  else if(m==="EBREAK") out.push(0x00100073);
+  else if(m==="LI"){ const imm=need(parseImmTok(tokens[2],ctx),"LI 立即数"); if(isSigned12(imm)) out.push(packI(imm,0,0,need(rd,"rd"),OPCODE.OPI));
+    else { const [h,l]=hiLo(imm); out.push(packU(h,need(rd,"rd"),OPCODE.LUI)); out.push(packI(l,need(rd,"rd"),0,need(rd,"rd"),OPCODE.OPI)); } }
+  else if(m==="LA"){ const a=need(parseImmTok(tokens[2],ctx),"LA 地址"); const [h,l]=hiLo(a); out.push(packU(h,need(rd,"rd"),OPCODE.LUI)); out.push(packI(l,need(rd,"rd"),0,need(rd,"rd"),OPCODE.OPI)); }
+  else if(m==="MV") out.push(packI(0,need(rs1,"rs1"),0,need(rd,"rd"),OPCODE.OPI));
+  else if(m==="NOT") out.push(packI(-1,need(rs1,"rs1"),4,need(rd,"rd"),OPCODE.OPI));
+  else if(m==="NEG") out.push(packR(0x20,need(rs1,"rs1"),0,0,need(rd,"rd"),OPCODE.OP));
+  else if(m==="SEQZ") out.push(packI(1,need(rs1,"rs1"),3,need(rd,"rd"),OPCODE.OPI));
+  else if(m==="SNEZ") out.push(packR(0,0,need(rs1,"rs1"),3,need(rd,"rd"),OPCODE.OP));
+  else if(m==="SLTZ") out.push(packR(0,need(rs1,"rs1"),0,2,need(rd,"rd"),OPCODE.OP));
+  else if(m==="SGTZ") out.push(packR(0,0,need(rs1,"rs1"),2,need(rd,"rd"),OPCODE.OP));
+  else if(m==="J") out.push(packJ(need(rel(tokens[1]),"J 目标"),0,OPCODE.JAL));
+  else if(m==="JR") out.push(packI(0,need(regNum(tokens[1]),"rs1"),0,0,OPCODE.JALR));
+  else if(m==="RET") out.push(packI(0,1,0,0,OPCODE.JALR));
+  else if(m==="CALL"){ const a=need(parseImmTok(tokens[1],ctx),"CALL 目标"); const [h,l]=hiLo(a); out.push(packU(h,1,OPCODE.LUI)); out.push(packI(l,1,0,1,OPCODE.JALR)); }
+  else if(m==="MUL"||m==="DIVU"||m==="REMU"){
+    const fn = m==="MUL" ? "__os_mul" : "__os_divu";
+    const sa=need(rs1,"rs1"), sb=need(rs2,"rs2"), d=need(rd,"rd");
+    out.push(packI(-16,2,0,2,OPCODE.OPI));      // ADDI sp, sp, -16
+    out.push(packS(0,1,2,STORE.SW,OPCODE.STORE));// SW ra, 0(sp)
+    out.push(packI(0,sa,0,10,OPCODE.OPI));      // ADDI a0, rs1, 0
+    out.push(packI(0,sb,0,11,OPCODE.OPI));      // ADDI a1, rs2, 0
+    const a=sym[fn]; if(a===undefined) throw new Error("缺系统例程 "+fn);
+    const [h,l]=hiLo(a);
+    out.push(packU(h,1,OPCODE.LUI)); out.push(packI(l,1,0,1,OPCODE.JALR)); // call
+    out.push(packI(0,2,LOAD.LW,1,OPCODE.LOAD)); // LW ra, 0(sp)
+    out.push(packI(16,2,0,2,OPCODE.OPI));       // ADDI sp, sp, 16
+    out.push(packI(0,(m==="REMU"?11:10),0,d,OPCODE.OPI)); // ADDI rd, a0 / a1, 0
+  }
+  else throw new Error("未知指令 "+tokens[0]);
+  return out;
+}
+
+function assemble(src, base, extra){
+  extra = extra||{};
+  const lines = src.split(/\r?\n/);
+  const sym = Object.assign({}, extra);
+  // pass 1：量长度、记录标签
+  let section="text", textLen=0, dataLen=0;
+  const labels = {};
+  function curLen(){ return section==="text"?textLen:dataLen; }
+  function addLen(n){ if(section==="text") textLen+=n; else dataLen+=n; }
+  for(let raw of lines){
+    const line = stripComment(raw).trim();
+    if(!line) continue;
+    let rest = line;
+    // 标签（可单独一行，或与指令同行）
+    const lm = line.match(/^([A-Za-z_.][\w.]*):\s*(.*)$/);
+    if(lm){ labels[lm[1]]={section,off:curLen()}; rest=lm[2].trim(); if(!rest) continue; }
+    if(/^\.ascii(z)?\b/i.test(rest)){
+      const isz=/^\.asciiz\b/i.test(rest);
+      let s=parseString(rest.replace(/^\.ascii(z)?\s*/i,"").trim()); if(s===null) s="";
+      addLen(s.length + (isz?1:0)); continue;
+    }
+    const toks = tokenize(rest);
+    if(!toks.length) continue;
+    const d=toks[0].toLowerCase();
+    if(d===".text"){ section="text"; continue; }
+    if(d===".data"){ section="data"; continue; }
+    if(d===".globl") continue;
+    if(d===".align"){ const n=parseNum(toks[1]); const align=1<<n; const off=curLen(); addLen((align-(off%align))%align); continue; }
+    if(d===".word"){ addLen(4*(toks.length-1)); continue; }
+    if(d===".byte"){ addLen(toks.length-1); continue; }
+    if(d===".space"){ addLen(parseNum(toks[1])); continue; }
+    if(d.startsWith(".")) continue; // 未知伪指令忽略
+    addLen(countWords(toks)*4);
+  }
+  const textBase=base>>>0;
+  const dataBase=(textBase+textLen+3)&~3;
+  const symFinal=Object.assign({}, extra);
+  for(const k in labels){ const L=labels[k]; symFinal[k] = (L.section==="text"?textBase:dataBase)+L.off; }
+  // pass 2：生成字节
+  const textBytes=[], dataBytes=[];
+  section="text"; let toff=0, doff=0;
+  function buf(){ return section==="text"?textBytes:dataBytes; }
+  function addBytes(arr){ const b=buf(); for(const x of arr) b.push(x&0xff); if(section==="text") toff+=arr.length; else doff+=arr.length; }
+  function w4(w){ addBytes([w&0xff,(w>>>8)&0xff,(w>>>16)&0xff,(w>>>24)&0xff]); }
+  const errors=[];
+  for(let raw of lines){
+    const line = stripComment(raw).trim();
+    if(!line) continue;
+    let rest=line;
+    const lm = line.match(/^([A-Za-z_.][\w.]*):\s*(.*)$/);
+    if(lm){ rest=lm[2].trim(); if(!rest) continue; }
+    if(/^\.ascii(z)?\b/i.test(rest)){
+      const isz=/^\.asciiz\b/i.test(rest);
+      let s=parseString(rest.replace(/^\.ascii(z)?\s*/i,"").trim()); if(s===null) s="";
+      const arr=[]; for(const ch of s) arr.push(ch.charCodeAt(0)&0xff); if(isz) arr.push(0);
+      addBytes(arr); continue;
+    }
+    const toks=tokenize(rest);
+    if(!toks.length) continue;
+    const d=toks[0].toLowerCase();
+    if(d===".text"){ section="text"; continue; }
+    if(d===".data"){ section="data"; continue; }
+    if(d===".globl") continue;
+    if(d===".align"){ const n=parseNum(toks[1]); const align=1<<n; const cur=(section==="text"?toff:doff); const pad=(align-(cur%align))%align; for(let i=0;i<pad;i++) addBytes([0]); continue; }
+    if(d===".word"){ for(let i=1;i<toks.length;i++){ const v=parseImmTok(toks[i],{sym:symFinal}); if(v===null){errors.push("无法解析 .word "+toks[i]); w4(0);} else w4(v); } continue; }
+    if(d===".byte"){ for(let i=1;i<toks.length;i++){ const v=parseImmTok(toks[i],{sym:symFinal}); addBytes([v===null?0:v&0xff]); } continue; }
+    if(d===".space"){ const n=parseNum(toks[1]); for(let i=0;i<n;i++) addBytes([0]); continue; }
+    if(d.startsWith(".")) continue;
+    const addr = (section==="text"? textBase+toff : dataBase+doff);
+    try{ const ws=emitInstruction(toks,{sym:symFinal,addr}); for(const w of ws) w4(w); }
+    catch(e){ errors.push(e.message+" （行已跳过： "+rest+" ）"); for(let i=0;i<countWords(toks);i++) w4(0); }
+  }
+  const pad = (dataBase - (textBase + textBytes.length)) >>> 0;
+  for(let i=0;i<pad;i++) textBytes.push(0);
+  const out = new Uint8Array(Math.max(textBytes.length + dataBytes.length, 1));
+  out.set(textBytes,0); out.set(dataBytes, textBytes.length);
+  return {ok: errors.length===0, bytes:out, textLen:textBytes.length, dataLen:dataBytes.length,
+          entry:textBase, dataBase, symbols:symFinal, errors};
+}
+
+// ===================== 系统程序（写入 OS 区 0x9000+） =====================
+const SYS_SRC = `
+.text
+.space 0xAC0                # 让 __idle 落在 OS_BASE+0xAC0 = 0x9AC0
+__idle:
+  nop
+  j __idle
+
+# 输入类按键共用一个中断程序：从锁存器取 8 位 ASCII 码
+__int_printable:
+  la t0, 0x1640
+  lw t1, 0(t0)
+  la t0, 0x1654
+  sw t1, 0(t0)
+  ret
+
+# 控制类按键各有一个中断程序（演示跳转与取码）
+__int_enter:
+  la t0, 0x1640
+  lw t1, 0(t0)
+  ret
+__int_back:
+  la t0, 0x1640
+  lw t1, 0(t0)
+  ret
+__int_esc:
+  la t0, 0x1640
+  lw t1, 0(t0)
+  ret
+__int_left:
+  la t0, 0x1640
+  lw t1, 0(t0)
+  ret
+__int_right:
+  la t0, 0x1640
+  lw t1, 0(t0)
+  ret
+__int_up:
+  la t0, 0x1640
+  lw t1, 0(t0)
+  ret
+__int_down:
+  la t0, 0x1640
+  lw t1, 0(t0)
+  ret
+__int_pgup:
+  la t0, 0x1640
+  lw t1, 0(t0)
+  ret
+__int_pgdn:
+  la t0, 0x1640
+  lw t1, 0(t0)
+  ret
+
+__os_mul:                    # a0 = a0 * a1（无符号，低32位）
+  li t0, 0
+  li t1, 0
+__os_mul_loop:
+  andi t2, a1, 1
+  beq t2, zero, __os_mul_skip
+  add t0, t0, a0
+__os_mul_skip:
+  slli a0, a0, 1
+  srli a1, a1, 1
+  addi t1, t1, 1
+  li t2, 32
+  bne t1, t2, __os_mul_loop
+  mv a0, t0
+  ret
+
+__os_divu:                   # a0 / a1 → a0=商, a1=余（无符号，恢复余数法）
+  beq a1, zero, __os_divu_zero
+  li t0, 0
+  li t1, 0
+  li t2, 0x80000000
+__os_divu_loop:
+  slli t1, t1, 1
+  and t3, a0, t2
+  beq t3, zero, __os_divu_nobit
+  ori t1, t1, 1
+__os_divu_nobit:
+  bltu t1, a1, __os_divu_skip
+  sub t1, t1, a1
+  or t0, t0, t2
+__os_divu_skip:
+  srli t2, t2, 1
+  bne t2, zero, __os_divu_loop
+  mv a0, t0
+  mv a1, t1
+  ret
+__os_divu_zero:
+  li a0, -1
+  mv a1, a0
+  ret
+
+# 十进制显示：a0=无符号整数，输出到 0xD000，调用 ECALL 显示，返回 a1=长度
+__os_print_int:
+  addi sp, sp, -64
+  sw ra, 0(sp)
+  sw s0, 4(sp)
+  sw s1, 8(sp)
+  sw s2, 12(sp)
+  sw s3, 16(sp)
+  lui s0, 13
+  addi s1, s0, 0
+  addi s2, sp, 32
+  addi s3, zero, 0
+__os_print_int_digits:
+  addi a1, zero, 10
+  remu t3, a0, a1
+  addi t3, t3, 48
+  sb t3, 0(s2)
+  addi s2, s2, 1
+  addi s3, s3, 1
+  bne a0, zero, __os_print_int_digits
+__os_print_int_rev:
+  addi s2, s2, -1
+  lb t3, 0(s2)
+  sb t3, 0(s1)
+  addi s1, s1, 1
+  addi s3, s3, -1
+  bne s3, zero, __os_print_int_rev
+  addi t3, zero, 10
+  sb t3, 0(s1)
+  addi s1, s1, 1
+  addi a1, s1, 0
+  addi a0, s0, 0
+  addi a7, zero, 1
+  ecall
+  lw s3, 16(sp)
+  lw s2, 12(sp)
+  lw s1, 8(sp)
+  lw s0, 4(sp)
+  lw ra, 0(sp)
+  addi sp, sp, 64
+  ret
+`;
+
+// 引导程序（PROM 0x0000）：把系统镜像从 ROM_IMAGE 搬到 OS 区，初始化状态寄存器，跳转到空闲循环
+function bootSource(osLen){
+  return `
+.text
+boot:
+  li t0, 0x0100
+  li t1, 0x9000
+  li t2, ${osLen}
+copy_loop:
+  beq t2, zero, copy_done
+  lw t3, 0(t0)
+  sw t3, 0(t1)
+  addi t0, t0, 4
+  addi t1, t1, 4
+  addi t2, t2, -4
+  j copy_loop
+copy_done:
+  li t0, 0x1640
+  sw zero, 0(t0)
+  sw zero, 4(t0)
+  sw zero, 8(t0)
+  li t3, 1
+  sw t3, 12(t0)
+  li sp, 0x8ff0
+  sw sp, 16(t0)
+  j __idle
+`;
+}
+
+let osSymbols = {};
+let intAddrs = {};
+
+// ===================== 文件系统（FAT 式线性目录 + 布尔矩阵） =====================
+function allocSector(){
+  // 布尔矩阵“二分查找”的朴素实现：从 2 号扇区开始找可用位
+  for(let i=2;i<SECTOR_COUNT;i++){ if(!sectorUsed[i]){ sectorUsed[i]=1; return i; } }
+  return -1;
+}
+function freeSector(s){ if(s>=2 && s<SECTOR_COUNT) sectorUsed[s]=0; }
+function encodeEntry(e){
+  const b=new Uint8Array(DIR_ENTRY_SIZE);
+  for(let i=0;i<11;i++) b[i]=(e.name[i]||" ").charCodeAt(0)&0xff;
+  b[11]=(e.type==="B"?0x42:0x54);
+  b[12]=e.size&0xff; b[13]=(e.size>>>8)&0xff; b[14]=(e.size>>>16)&0xff; b[15]=(e.size>>>24)&0xff;
+  b[16]=e.sectors.length;
+  for(let i=0;i<e.sectors.length && i<MAX_SECTORS_PER_FILE;i++){
+    const s=e.sectors[i], off=20+i*4;
+    b[off]=s&0xff; b[off+1]=(s>>>8)&0xff; b[off+2]=(s>>>16)&0xff; b[off+3]=(s>>>24)&0xff;
+  }
+  return b;
+}
+function serializeDir(){
+  for(let i=0;i<DIR_MAX;i++){
+    const e=directory[i];
+    const b=e?encodeEntry(e):new Uint8Array(DIR_ENTRY_SIZE);
+    const off=DISK_BASE+i*DIR_ENTRY_SIZE;
+    for(let j=0;j<DIR_ENTRY_SIZE;j++) writeByteSilent(off+j, b[j]);
+  }
+}
+function writeByteSilent(a,v){
+  v&=0xff; const u=a>>>0;
+  if(isRAM(u)){ ram[u]=v; ramAge[u]=heatTick; ramType[u]=2; }
+  else { const s=diskSectorIndex(u); if(s>=0){ const o=u-DISK_BASE-s*SECTOR_SIZE; getSectorBuf(s)[o]=v; sectorAge[s]=heatTick; sectorType[s]=2; } }
+}
+function writeWordSilent(a,v){
+  writeByteSilent(a, v&0xff); writeByteSilent(a+1,(v>>>8)&0xff);
+  writeByteSilent(a+2,(v>>>16)&0xff); writeByteSilent(a+3,(v>>>24)&0xff);
+}
+function findExact(name){
+  name=name.trim();
+  for(const e of directory) if(e && e.name===name) return e;
+  return null;
+}
+function matchGlob(pat, str, p=0, s=0){
+  while(p<pat.length){
+    if(pat[p]==="*"){
+      while(p<pat.length && pat[p]==="*") p++;
+      if(p===pat.length) return true;
+      for(let k=s;k<=str.length;k++){ if(matchGlob(pat,str,p,k)) return true; }
+      return false;
+    }
+    if(s>=str.length) return false;
+    if(pat[p]==="?" || pat[p]===str[s]){ p++; s++; }
+    else return false;
+  }
+  return s===str.length;
+}
+function findPattern(pattern){
+  return directory.filter(e=>e && matchGlob(pattern, e.name));
+}
+function removeFile(name){
+  const idx=directory.findIndex(e=>e && e.name===name);
+  if(idx<0) return false;
+  const e=directory[idx];
+  for(const s of e.sectors) freeSector(s);
+  directory.splice(idx,1);
+  serializeDir();
+  return true;
+}
+function storeFile(name, bytes, type){
+  const nsec=Math.max(1, Math.ceil(bytes.length/SECTOR_SIZE));   // 新建至少分配 1 个扇区
+  if(nsec>MAX_SECTORS_PER_FILE){ logMem("err", `文件 ${name} 过大（>${MAX_SECTORS_PER_FILE*SECTOR_SIZE}B）`); return false; }
+  const sectors=[];
+  for(let i=0;i<nsec;i++){ const s=allocSector(); if(s<0){ logMem("err","磁盘已满"); return false; } sectors.push(s); }
+  for(let i=0;i<bytes.length;i++) writeByte(DISK_BASE+sectors[Math.floor(i/SECTOR_SIZE)]*SECTOR_SIZE+(i%SECTOR_SIZE), bytes[i]);
+  directory.push({name, type, sectors, size:bytes.length});
+  serializeDir();
+  return true;
+}
+function saveFile(name, bytes, type){
+  const e=findExact(name);
+  if(e){
+    for(const s of e.sectors) freeSector(s);
+    const nsec=Math.max(1, Math.ceil(bytes.length/SECTOR_SIZE));
+    if(nsec>MAX_SECTORS_PER_FILE){ logMem("err", `文件 ${name} 过大`); return false; }
+    const sectors=[];
+    for(let i=0;i<nsec;i++){ const s=allocSector(); if(s<0){ logMem("err","磁盘已满"); return false; } sectors.push(s); }
+    for(let i=0;i<bytes.length;i++) writeByte(DISK_BASE+sectors[Math.floor(i/SECTOR_SIZE)]*SECTOR_SIZE+(i%SECTOR_SIZE), bytes[i]);
+    e.type=type; e.sectors=sectors; e.size=bytes.length;
+    serializeDir();
+    return true;
+  }
+  return storeFile(name, bytes, type);
+}
+function readFileBytes(name){
+  const e=findExact(name);
+  if(!e) return null;
+  const out=new Uint8Array(e.size);
+  for(let i=0;i<e.size;i++){
+    const sec=e.sectors[Math.floor(i/SECTOR_SIZE)];
+    out[i]=readByte(DISK_BASE+sec*SECTOR_SIZE+(i%SECTOR_SIZE));
+  }
+  return out;
+}
+function strBytes(s){ const a=new Uint8Array(s.length); for(let i=0;i<s.length;i++) a[i]=s.charCodeAt(i)&0xff; return a; }
+
+// ===================== 屏幕 / 光标 / 渲染 =====================
+function buildVRAM(src, start){
+  const vram=new Uint8Array(VRAM_SIZE); vram.fill(0x20);
+  let i=start, o=0, end=src.length;
+  while(o<VRAM_SIZE && i<end){
+    const c=src.charCodeAt(i);
+    if(c===10){ o=(Math.floor(o/COLS)+1)*COLS; i++; }
+    else { vram[o++]=c; i++; }
+  }
+  return vram;
+}
+function cursorScreenPos(src, dz, cur){
+  let col=0, row=0, end=Math.min(cur, src.length);
+  for(let i=dz;i<end;i++){
+    const c=src.charCodeAt(i);
+    if(c===10){ row++; col=0; if(row>=ROWS) break; }
+    else { col++; if(col>=COLS){ row++; col=0; if(row>=ROWS) break; } }
+  }
+  return {col:Math.min(col,COLS-1), row:Math.min(row,ROWS-1)};
+}
+function drawMonitor(){
+  mctx.fillStyle="#04070a"; mctx.fillRect(0,0,monitor.width,monitor.height);
+  mctx.font="14px 'Cascadia Mono', Consolas, monospace";
+  mctx.textBaseline="top";
+  for(let r=0;r<ROWS;r++){
+    for(let c=0;c<COLS;c++){
+      const b=ram[VRAM_BASE+r*COLS+c];
+      const ch=(b>=0x20&&b<=0x7e)?String.fromCharCode(b):" ";
+      mctx.fillStyle="#8fe3b0";
+      mctx.fillText(ch, c*CELL_W+1, r*CELL_H+2);
+    }
+  }
+  const src = mode==="file"?fileContent:workspace;
+  const pos = cursorScreenPos(src, displayZero, cursor);
+  if(performance.now()%1000<500){
+    mctx.fillStyle="rgba(61,220,132,.92)";
+    mctx.fillRect(pos.col*CELL_W+1, pos.row*CELL_H+1, CELL_W-2, CELL_H-2);
+    mctx.fillStyle="#04210f";
+    const b=ram[VRAM_BASE+pos.row*COLS+pos.col];
+    const ch=(b>=0x20&&b<=0x7e)?String.fromCharCode(b):" ";
+    mctx.fillText(ch, pos.col*CELL_W+1, pos.row*CELL_H+2);
+  }
+}
+function syncTextRegion(){
+  const src=mode==="file"?fileContent:workspace;
+  const base=mode==="file"?TEXT_BASE:WORK_BASE;
+  const cap=mode==="file"?TEXT_SIZE:WORK_SIZE;
+  const len=Math.min(src.length, cap);
+  const arr=new Uint8Array(len);
+  for(let i=0;i<len;i++) arr[i]=src.charCodeAt(i)&0xff;
+  writeBytesBulk(base, arr, false);
+}
+function renderDisplay(){
+  syncTextRegion();
+  const src=mode==="file"?fileContent:workspace;
+  writeBytesBulk(VRAM_BASE, buildVRAM(src, displayZero), false);
+  drawMonitor();
+  updateStatus();
+}
+function updateStatus(){
+  syncStatusLatches();
+  $("pc").textContent=hex(pc);
+  $("curIns").textContent=lastIns;
+  $("sp").textContent=hex(reg[2]>>>0);
+  $("curpos").textContent=cursor;
+  $("dispzero").textContent=displayZero;
+  $("modeLabel").textContent=mode==="file"?"FILE 文件模式":"SHELL 命令模式";
+  $("modeaddr").textContent=mode==="file"?"file(0x3000)":"shell(0x2000)";
+  $("fileLabel").textContent=currentFile||"无";
+  const s=mode==="file"?fileContent:workspace;
+  $("slices").textContent=mode==="file"?formatSlices():"—";
+  $("irqLed").className="led"+(queue.length?" busy":"");
+  $("qHead").textContent=queue.length?("0x"+queue[0].code.toString(16).toUpperCase().padStart(2,"0")):"-";
+  $("qTail").textContent=queue.length?("0x"+queue[queue.length-1].code.toString(16).toUpperCase().padStart(2,"0")):"-";
+}
+let lastLatch={cursor:-1,dz:-1,mode:-1,sp:-1};
+function syncStatusLatches(){
+  const m = mode==="file"?2:1, sp = reg[2]>>>0;
+  if(lastLatch.cursor!==cursor){ writeWordSilent(STATUS_CURSOR, cursor); lastLatch.cursor=cursor; }
+  if(lastLatch.dz!==displayZero){ writeWordSilent(STATUS_DISPZERO, displayZero); lastLatch.dz=displayZero; }
+  if(lastLatch.mode!==m){ writeWordSilent(STATUS_MODE, m); lastLatch.mode=m; }
+  if(lastLatch.sp!==sp){ writeWordSilent(STATUS_SP, sp); lastLatch.sp=sp; }
+}
+function formatSlices(){
+  if(!slices.length) return "[无切片]";
+  return slices.map((s,i)=>`[${i}] ${s.kind} ${s.begin}-${s.end} len=${s.length}`).join("\n");
+}
+function updateRegs(){
+  let h="";
+  const names={1:"ra",2:"sp",3:"gp",4:"tp",5:"t0",6:"t1",7:"t2",8:"s0",9:"s1",10:"a0",11:"a1",
+    12:"a2",13:"a3",14:"a4",15:"a5",16:"a6",17:"a7",18:"s2",19:"s3",20:"s4",21:"s5",22:"s6",23:"s7",
+    24:"s8",25:"s9",26:"s10",27:"s11",28:"t3",29:"t4",30:"t5",31:"t6"};
+  h+=`<div class="r">x0 0</div>`;
+  for(let i=1;i<32;i++){
+    h+=`<div class="r">${names[i]} ${hex(reg[i]>>>0,8)}</div>`;
+  }
+  regsEl.innerHTML=h;
+}
+function renderQueue(){
+  if(!queue.length){ queueEl.innerHTML="<span class='hint'>队列空</span>"; return; }
+  queueEl.innerHTML=queue.map(q=>{
+    const ctrl=isControl(q.code);
+    const label=keyLabel(q.code);
+    return `<span class="qcell${ctrl?" ctrl":""}" title="${label}">${hex(q.code,2)}</span>`;
+  }).join("");
+}
+function keyLabel(code){
+  if(code===KEY.ENTER) return "Enter"; if(code===KEY.BACK) return "Backspace";
+  if(code===KEY.ESC) return "Esc"; if(code===KEY.LEFT) return "←"; if(code===KEY.RIGHT) return "→";
+  if(code===KEY.UP) return "↑"; if(code===KEY.DOWN) return "↓"; if(code===KEY.PGUP) return "PgUp";
+  if(code===KEY.PGDN) return "PgDn";
+  return ascii(code)||("0x"+code.toString(16));
+}
+// ===================== 存储读写观察窗绘制 =====================
+function regionName(a){
+  if(a>=ROM_BASE && a<ROM_BASE+ROM_SIZE) return "ROM/OS";
+  if(a>=VRAM_BASE && a<VRAM_BASE+VRAM_SIZE) return "VRAM(显示)";
+  if(a>=STATUS_BASE && a<WORK_BASE) return "状态锁存区";
+  if(a>=WORK_BASE && a<WORK_BASE+WORK_SIZE) return "shell 工作区";
+  if(a>=TEXT_BASE && a<TEXT_BASE+TEXT_SIZE) return "文件文本块";
+  if(a>=SLICE_BASE && a<SLICE_BASE+SLICE_SIZE) return "切片表";
+  if(a>=STACK_BASE && a<STACK_BASE+0x1000) return "栈";
+  if(a>=OS_BASE && a<OS_BASE+OS_SIZE) return "系统程序区";
+  if(a>=CODE_BASE && a<CODE_BASE+CODE_SIZE) return "用户代码";
+  return "保留/未用";
+}
+let lastMemDraw=-1;
+function drawMemory(){
+  drawRam(); drawDisk(); lastMemDraw=heatTick;
+}
+function drawRam(){
+  const W=ramCanvas.width,H=ramCanvas.height,cols=128,rows=128,cw=W/cols,ch=H/rows;
+  rctx.fillStyle="#070a0e"; rctx.fillRect(0,0,W,H);
+  for(let r=0;r<rows;r++){
+    for(let c=0;c<cols;c++){
+      const idx=r*cols+c, a=idx<<2;
+      let age=0,type=0;
+      for(let k=0;k<4;k++){ if(ramAge[a+k]>age){age=ramAge[a+k];type=ramType[a+k];} }
+      rctx.fillStyle=regionColor(a);
+      rctx.fillRect(c*cw, r*ch, cw+0.6, ch+0.6);
+      if(age>0){ const fresh=heatTick-age; if(fresh<HEAT_FRAMES){
+        const alpha=(1-fresh/150).toFixed(2);
+        rctx.fillStyle= type===2?`rgba(255,150,60,${alpha})`:`rgba(90,180,255,${alpha})`;
+        rctx.fillRect(c*cw, r*ch, cw+0.6, ch+0.6);
+      } }
+    }
+  }
+}
+function drawDisk(){
+  const W=diskCanvas.width,H=diskCanvas.height,cw=W/DISK_VIEW_SECTORS;
+  dctx.fillStyle="#070a0e"; dctx.fillRect(0,0,W,H);
+  for(let s=0;s<DISK_VIEW_SECTORS;s++){
+    let col = s<DIR_SECTORS ? "#6a4fa0" : (sectorUsed[s] ? "#2e7d5b" : "#18212b");
+    dctx.fillStyle=col; dctx.fillRect(s*cw,0,cw-1,H);
+    let age=sectorAge[s],type=sectorType[s];
+    if(age>0){ const fresh=heatTick-age; if(fresh<HEAT_FRAMES){
+      const alpha=(1-fresh/150).toFixed(2);
+      dctx.fillStyle= type===2?`rgba(255,150,60,${alpha})`:`rgba(90,180,255,${alpha})`;
+      dctx.fillRect(s*cw,0,cw-1,H);
+    } }
+  }
+  dctx.fillStyle="#8fa0b4"; dctx.font="9px monospace"; dctx.textBaseline="bottom";
+  for(let s=0;s<DISK_VIEW_SECTORS;s+=32) dctx.fillText(String(s), s*cw+1, H-2);
+}
+function canvasPoint(canvas,e){
+  const r=canvas.getBoundingClientRect();
+  return {x:(e.clientX-r.left)*(canvas.width/r.width), y:(e.clientY-r.top)*(canvas.height/r.height)};
+}
+
+// ===================== 编辑 / 切片 / 光标 =====================
+let pieceOriginal = "";      // 源文件（磁盘）内容
+let pieceAdd = "";           // 文本块（RAM 追加区）内容
+let pieces = [];             // 分段表：{from:'orig'|'add', start, len}
+function rebuildFileText(){
+  let s="";
+  for(const p of pieces){ const src=p.from==='orig'?pieceOriginal:pieceAdd; s+=src.slice(p.start,p.start+p.len); }
+  fileContent=s;
+}
+function coalescePieces(){
+  for(let i=pieces.length-1;i>0;i--){
+    const a=pieces[i-1], b=pieces[i];
+    if(a.from===b.from && a.start+a.len===b.start){ a.len+=b.len; pieces.splice(i,1); }
+  }
+}
+function insertPieceChar(ch){
+  const total=fileContent.length;
+  cursor=clamp(cursor,0,total);
+  pieceAdd+=ch;
+  const np={from:'add', start:pieceAdd.length-1, len:1};
+  if(cursor===total){ pieces.push(np); }
+  else {
+    let acc=0, done=false;
+    for(let i=0;i<pieces.length;i++){
+      const p=pieces[i];
+      if(cursor < acc+p.len){
+        const leftLen=cursor-acc;
+        if(leftLen===0){ pieces.splice(i,0,np); }
+        else if(leftLen===p.len){ pieces.splice(i+1,0,np); }
+        else { const left={from:p.from,start:p.start,len:leftLen}, right={from:p.from,start:p.start+leftLen,len:p.len-leftLen}; pieces.splice(i,1,left,np,right); }
+        done=true; break;
+      }
+      acc+=p.len;
+    }
+    if(!done) pieces.push(np);
+  }
+  coalescePieces();
+  rebuildFileText();
+}
+function deletePieceChar(){
+  if(cursor<=0) return;
+  const pos=cursor-1, total=fileContent.length;
+  if(pos>=total){ cursor=total; return; }
+  let acc=0;
+  for(let i=0;i<pieces.length;i++){
+    const p=pieces[i];
+    if(pos < acc+p.len){
+      const off=pos-acc;
+      if(p.len===1){ pieces.splice(i,1); }
+      else if(off===0){ p.start++; p.len--; }
+      else if(off===p.len-1){ p.len--; }
+      else { const left={from:p.from,start:p.start,len:off}, right={from:p.from,start:p.start+off+1,len:p.len-off-1}; pieces.splice(i,1,left,right); }
+      coalescePieces();
+      rebuildFileText();
+      return;
+    }
+    acc+=p.len;
+  }
+}
+function insertAt(s, idx, ch){ return s.slice(0,idx)+ch+s.slice(idx); }
+function deleteBefore(s, idx){ return idx<=0 ? s : s.slice(0,idx-1)+s.slice(idx); }
+function pad(s,n){ s=String(s); while(s.length<n) s+=" "; return s; }
+function decodeText(b){ try{ return new TextDecoder("utf-8").decode(b); }catch(e){ let s=""; for(const x of b) s+=String.fromCharCode(x); return s; } }
+function encodeText(s){ return new TextEncoder().encode(s); }
+function updateSlices(){
+  if(mode!=="file"){ slices=[]; return; }
+  slices = pieces.map(p=>({kind:p.from==='orig'?'source':'temp', begin:p.start, end:p.start+p.len, length:p.len}));
+}
+function normalizeView(){
+  const src=mode==="file"?fileContent:workspace;
+  cursor=clamp(cursor,0,src.length);
+  if(mode==="file"){
+    displayZero = clamp(displayZero, 0, src.length);
+    displayZero = lineStartOf(src, displayZero);
+    if(cursor < displayZero){ displayZero = lineStartOf(src, cursor); }
+    else if(cursor - displayZero >= VRAM_SIZE){
+      let dz=displayZero;
+      while(cursor - dz >= VRAM_SIZE && dz < src.length){ dz = forwardLines(src, dz, 1); }
+      displayZero = dz;
+    }
+  } else {
+    displayZero=(cursor>>>10)<<10;
+    if(cursor - displayZero >= VRAM_SIZE) displayZero = (cursor - VRAM_SIZE + 1) & ~0x3ff;
+  }
+}
+function lineStartOf(src, pos){ let i=pos-1; while(i>=0 && src[i]!=='\n') i--; return i+1; }
+function forwardLines(src, from, n){ let p=from; for(let k=0;k<n;k++){ const nl=src.indexOf('\n',p); if(nl<0){ p=src.length; break; } p=nl+1; } return p; }
+function backwardLines(src, from, n){ let p=from; for(let k=0;k<n && p>0;k++){ if(src[p-1]==='\n') p--; const nl=src.lastIndexOf('\n',p-1); p=nl<0?0:nl+1; } return p; }
+function moveCursor(d){
+  const src=mode==="file"?fileContent:workspace;
+  cursor=clamp(cursor+d,0,src.length);
+  normalizeView();
+}
+function moveLine(dir){
+  const src=mode==="file"?fileContent:workspace;
+  cursor = dir>0 ? forwardLines(src, cursor, 1) : backwardLines(src, cursor, 1);
+  normalizeView();
+}
+function print(s){ workspace+=s; }
+function clearWorkspace(){ workspace=""; cursor=0; displayZero=0; logMem("sys","清除工作区，光标复位"); }
+
+// ===================== 命令（内置函数） =====================
+function doFind(arg){
+  const pat=arg.trim();
+  if(!pat){ print("Usage: FIND name (? and * wildcards)\n"); return; }
+  const res=findPattern(pat);
+  if(!res.length){ print(`No file matches "${pat}"\n`); return; }
+  print("NAME         TYPE  SECTORS       ADDR       SIZE\n");
+  for(const e of res){
+    print(pad(e.name,12)+" "+(e.type==="B"?"bin":"txt")+"  "+pad("["+e.sectors.join(",")+"]",12)+" "+hex(DISK_BASE+e.sectors[0]*SECTOR_SIZE)+"  "+e.size+"B\n");
+  }
+}
+function doRename(arg){
+  let from,to;
+  const a=arg.trim();
+  if(a.includes("->")){ const p=a.split("->"); from=p[0].trim(); to=p.slice(1).join("->").trim(); }
+  else { const p=a.split(/\s+/); from=p[0]; to=p[1]; }
+  if(!from||!to){ print("Usage: RENAME old new\n"); return; }
+  const e=findExact(from);
+  if(!e){ print(`Error: file not found: ${from}\n`); return; }
+  e.name=to; serializeDir(); print(`Renamed ${from} -> ${to}\n`);
+}
+function doBuild(arg){
+  const name=arg.trim();
+  if(!name){ print("Usage: BUILD filename\n"); return; }
+  if(!storeFile(name, new Uint8Array(0), "T")) return;
+  print(`Created ${name} (use OPEN ${name} to edit)\n`);
+  logMem("sys", `BUILD 创建空文件 ${name}`);
+}
+function doDelete(arg){
+  const name=arg.trim();
+  if(!name){ print("Usage: DELETE filename\n"); return; }
+  if(!findExact(name)){ print(`Error: file not found: ${name}\n`); return; }
+  removeFile(name);
+  print(`Deleted ${name}\n`);
+  logMem("sys", `DELETE 删除文件 ${name}`);
+}
+function doOpen(arg){
+  const name=arg.trim();
+  const e=findExact(name);
+  if(!e){ print(`Error: file not found: ${name}\n`); return; }
+  const bytes=readFileBytes(name);
+  fileContent = decodeText(bytes);
+  pieceOriginal=fileContent; pieceAdd=""; pieces = fileContent.length?[{from:'orig',start:0,len:fileContent.length}]:[];
+  cursor=0; displayZero=0; mode="file"; currentFile=name;
+  updateSlices();
+  logMem("sys", `OPEN 打开 ${name}，进入文件模式`);
+  renderDisplay();
+}
+function doCode(arg){
+  const name=arg.trim();
+  if(!name){ print("Usage: CODE source-file\n"); return; }
+  const b=readFileBytes(name);
+  if(!b){ print(`Error: file not found: ${name}\n`); return; }
+  const src=decodeText(b);
+  const res=assemble(src, CODE_BASE, {__os_mul:osSymbols.__os_mul, __os_divu:osSymbols.__os_divu, __os_print_int:osSymbols.__os_print_int});
+  const bin=new Uint8Array(res.bytes.length+4);
+  bin.set(res.bytes);
+  bin[bin.length-4]=res.textLen&0xff; bin[bin.length-3]=(res.textLen>>>8)&0xff;
+  bin[bin.length-2]=(res.textLen>>>16)&0xff; bin[bin.length-1]=(res.textLen>>>24)&0xff;
+  const binName="C-"+name;
+  if(!storeFile(binName, bin, "B")) return;
+  if(res.errors.length){ print(`Compiled ${name} -> ${binName} (${res.errors.length} lines skipped)\n`); for(const e of res.errors.slice(0,6)) print("  ! "+e+"\n"); }
+  else print(`Compiled ${name} -> ${binName} (code ${res.textLen}B + data ${res.dataLen}B)\n`);
+}
+function doRun(arg){
+  const name=arg.trim();
+  const e=findExact(name);
+  if(!e){ print(`Error: file not found: ${name}\n`); return; }
+  if(e.type!=="B"){ print(`Error: ${name} is not executable (CODE it first)\n`); return; }
+  const img=readFileBytes(name);
+  if(img.length<4){ print("Error: executable corrupted\n"); return; }
+  const textLen=(img[img.length-4]|(img[img.length-3]<<8)|(img[img.length-2]<<16)|(img[img.length-1]<<24))>>>0;
+  const codeData=img.subarray(0, img.length-4);
+  writeBytesBulk(CODE_BASE, codeData, false);
+  userCodeEnd=(CODE_BASE+textLen)>>>0;
+  reg.fill(0);
+  reg[1]=userCodeEnd; reg[27]=userCodeEnd; reg[2]=SP_INIT; pc=CODE_BASE;
+  execMode="user"; userExit=null;
+  print(`Running ${name} ...\n`);
+  logMem("sys", `RUN ${name}：代码载入 ${hex(CODE_BASE)}，返回地址槽 ${hex(userCodeEnd)}，跳转执行`);
+}
+function dispatchCommand(line){
+  const t=line.trim();
+  if(!t) return;
+  const sp=t.indexOf(" ");
+  const cmd=(sp<0?t:t.slice(0,sp)).toUpperCase();
+  const arg=sp<0?"":t.slice(sp+1).trim();
+  if(cmd==="CLEAR") clearWorkspace();
+  else if(cmd==="FIND") doFind(arg);
+  else if(cmd==="RENAME") doRename(arg);
+  else if(cmd==="BUILD") doBuild(arg);
+  else if(cmd==="DELETE") doDelete(arg);
+  else if(cmd==="OPEN") doOpen(arg);
+  else if(cmd==="CODE") doCode(arg);
+  else if(cmd==="RUN") doRun(arg);
+  else runAssembly(t);
+}
+function runAssembly(line){
+  const res=assemble(line, CODE_BASE, {__os_mul:osSymbols.__os_mul, __os_divu:osSymbols.__os_divu, __os_print_int:osSymbols.__os_print_int});
+  if(res.errors.length){ print("Assembly error (line skipped):\n"); for(const e of res.errors) print("  ! "+e+"\n"); return; }
+  writeBytesBulk(CODE_BASE, res.bytes, false);
+  userCodeEnd=(CODE_BASE+res.textLen)>>>0;
+  reg.fill(0);
+  reg[1]=userCodeEnd; reg[27]=userCodeEnd; reg[2]=SP_INIT; pc=CODE_BASE;
+  execMode="user"; userExit=null;
+  logMem("sys", `直接汇编执行：跳转到 ${hex(CODE_BASE)}`);
+}
+
+// ===================== 中断处理器 / 键盘语义 =====================
+function handleEnterShell(){
+  if(execMode==="user"){ captureInput(); return; }
+  const before=workspace.slice(0,cursor);
+  const lineStart=before.lastIndexOf("\n")+1;
+  const line=workspace.slice(lineStart,cursor).trimEnd();
+  workspace=workspace.slice(0,cursor)+"\n"+workspace.slice(cursor);
+  cursor=workspace.length;
+  dispatchCommand(line);
+  if(execMode!=="user") cursor=workspace.length;
+  normalizeView();
+}
+function captureInput(){
+  let i=cursor-1;
+  while(i>=0 && workspace.charCodeAt(i)!==MARKER) i--;
+  if(i<0){ logMem("err","输入捕获失败：未找到标记 '>'"); return; }
+  const text=workspace.slice(i+1, cursor).replace(/^[ \t\r\n]+/, "");
+  const bytes=strBytes(text);
+  writeBytesBulk(INPUT_BUF, bytes, false);
+  writeWordSilent(INPUT_LEN, bytes.length);
+  writeWordSilent(INPUT_FLAG, 1);
+  workspace=workspace.slice(0,cursor)+"\n"+workspace.slice(cursor);
+  cursor=workspace.length;
+  logMem("sys", `输入捕获：${JSON.stringify(text)}（${bytes.length}B）→ ${hex(INPUT_BUF)}，置输入结束标志=1`);
+}
+function handleUserKey(code){
+  writeByte(STATUS_KEY, code & 0xff);
+  if(code>=0x20 && code<=0x7e){ workspace=insertAt(workspace,cursor,String.fromCharCode(code)); cursor++; }
+  else if(code===KEY.ENTER) captureInput();
+  else if(code===KEY.BACK){ workspace=deleteBefore(workspace,cursor); cursor--; }
+  else if(code===KEY.LEFT) cursor=clamp(cursor-1,0,workspace.length);
+  else if(code===KEY.RIGHT) cursor=clamp(cursor+1,0,workspace.length);
+  normalizeView();
+}
+function handleShellKey(code){
+  if(code>=0x20 && code<=0x7e){ workspace=insertAt(workspace,cursor,String.fromCharCode(code)); cursor++; normalizeView(); }
+  else if(code===KEY.ENTER) handleEnterShell();
+  else if(code===KEY.BACK){ workspace=deleteBefore(workspace,cursor); cursor--; normalizeView(); }
+  else if(code===KEY.LEFT) moveCursor(-1);
+  else if(code===KEY.RIGHT) moveCursor(1);
+  else if(code===KEY.UP) moveCursor(-64);
+  else if(code===KEY.DOWN) moveCursor(64);
+  else if(code===KEY.PGUP) moveCursor(-1024);
+  else if(code===KEY.PGDN) moveCursor(1024);
+  else if(code===KEY.ESC) { /* shell 下忽略 */ }
+}
+function handleFileKey(code){
+  if(code>=0x20 && code<=0x7e){ insertPieceChar(String.fromCharCode(code)); cursor++; normalizeView(); updateSlices(); }
+  else if(code===KEY.ENTER){ insertPieceChar("\n"); cursor++; normalizeView(); updateSlices(); }
+  else if(code===KEY.BACK){ deletePieceChar(); cursor--; normalizeView(); updateSlices(); }
+  else if(code===KEY.LEFT) moveCursor(-1);
+  else if(code===KEY.RIGHT) moveCursor(1);
+  else if(code===KEY.UP) moveLine(-1);
+  else if(code===KEY.DOWN) moveLine(1);
+  else if(code===KEY.PGUP) pageFile(-1);
+  else if(code===KEY.PGDN) pageFile(1);
+  else if(code===KEY.ESC) closeFile();
+}
+const PAGE_LINES = 16;
+function pageFile(dir){
+  if(mode!=="file" || !currentFile) return;
+  saveFile(currentFile, encodeText(fileContent), "T");
+  pieceOriginal = fileContent; pieceAdd = ""; pieces = fileContent.length?[{from:'orig',start:0,len:fileContent.length}]:[];
+  const oldCursor = cursor;
+  displayZero = dir>0 ? forwardLines(fileContent, displayZero, PAGE_LINES) : backwardLines(fileContent, displayZero, PAGE_LINES);
+  cursor = displayZero;
+  normalizeView();
+  updateSlices();
+  logMem("sys", `翻页 ${dir>0?'PgDn':'PgUp'}：当前页写回磁盘（${oldCursor} -> ${cursor}），显示零位=${displayZero}`);
+}
+function closeFile(){
+  if(!currentFile){ mode="shell"; return; }
+  saveFile(currentFile, encodeText(fileContent), "T");
+  logMem("sys", `关闭 ${currentFile}：文本块写回磁盘，返回 shell`);
+  currentFile=null; mode="shell"; cursor=workspace.length; displayZero=(cursor>>>10)<<10;
+  updateSlices();
+}
+function intAddrsFor(code){
+  if(code>=0x20 && code<=0x7e) return intAddrs.printable;
+  const map={ [KEY.ENTER]:"enter",[KEY.BACK]:"back",[KEY.ESC]:"esc",[KEY.LEFT]:"left",
+    [KEY.RIGHT]:"right",[KEY.UP]:"up",[KEY.DOWN]:"down",[KEY.PGUP]:"pgup",[KEY.PGDN]:"pgdn" };
+  return intAddrs[map[code]] || intAddrs.printable;
+}
+function fireInterrupt(code){
+  writeByte(STATUS_KEY, code & 0xff);      // 中断处理器把 8 位码放进锁存器
+  irqFlash=8; cpuFlash=8;
+  if(mode==="shell") handleShellKey(code); else handleFileKey(code);
+  renderDisplay();
+  renderQueue();
+  // 若该键启动了用户程序（RUN/直接汇编），则 CPU 直接跑用户程序，不再进入中断返回
+  if(execMode==="user"){ logMem("sys", `中断 ${keyLabel(code)} 已启动用户程序，跳转 ${hex(pc)}`); return; }
+  reg[1]=IDLE_ADDR; pc=intAddrsFor(code); intrReturn=IDLE_ADDR; execMode="intr";
+  logMem("sys", `中断：${keyLabel(code)} → 跳转中断程序 ${hex(pc)}（返回 ${hex(intrReturn)}）`);
+}
+
+// ===================== 用户程序执行 / 主循环 =====================
+function finishUserProgram(){
+  execMode="idle";
+  const why = userExit==="ecall" ? "ECALL" : userExit==="ebreak" ? "EBREAK" : "离开代码区";
+  logMem("sys", `${why}：程序结束，返回系统空闲循环 ${hex(IDLE_ADDR)}`);
+  pc=IDLE_ADDR; lastIns="NOP（系统空闲循环）"; reg[1]=0; userExit=null;
+  cursor=workspace.length; normalizeView();
+}
+function stepOne(){
+  clockCount++;
+  executeOne();
+  if(execMode==="boot"){
+    if((pc>>>0)===IDLE_ADDR){ execMode="idle"; logMem("sys", `引导完成：跳转到系统默认程序（NOP 循环）${hex(IDLE_ADDR)}`); }
+    else if((pc>>>0)>=ROM_BASE+ROM_SIZE){ execMode="idle"; }
+  }
+  else if(execMode==="intr"){
+    if((pc>>>0)===intrReturn){ execMode="idle"; }
+  }
+  else if(execMode==="user"){
+    const p=pc>>>0;
+    const inProg=(p>=CODE_BASE && p<userCodeEnd) || (p>=OS_BASE && p<OS_BASE+OS_SIZE);
+    if(userExit || p===userCodeEnd || !inProg || clockCount>5_000_000){ finishUserProgram(); }
+  }
+}
+function stepSome(n){
+  for(let i=0;i<n;i++){ stepOne(); if(execMode==="idle"||execMode==="intr") return; }
+}
+let lastRenderLen=-1;
+function runCpuFrame(){
+  if(execMode==="boot"){ stepSome(SPEEDS[speedVal]); }
+  else if(execMode==="user"){
+    while(queue.length){ handleUserKey(queue.shift().code); }
+    stepSome(SPEEDS[speedVal]);
+    if(workspace.length!==lastRenderLen || execMode!=="user"){ renderDisplay(); lastRenderLen=workspace.length; }
+  }
+  else if(execMode==="intr"){ stepOne(); }
+  else { // idle
+    if(queue.length){ fireInterrupt(queue.shift().code); }
+    else { stepOne(); stepOne(); }
+  }
+}
+function manualStep(){
+  if(!powered) return;
+  if(execMode==="idle" && queue.length){ fireInterrupt(queue.shift().code); }
+  else stepOne();
+}
+const SPEEDS=[1,8,100,2000], SPEED_LABEL=["很慢","慢","中","快"];
+let speedVal=2, lastRegDraw=0, lastMemDrawTs=0;
+function frame(ts){
+  heatTick++;
+  if(powered && running){
+    runCpuFrame();
+  }
+  if(kbdFlash>0) kbdFlash--; if(irqFlash>0) irqFlash--; if(cpuFlash>0) cpuFlash--;
+  drawMonitor();
+  if(lastMemDraw!==heatTick && ts-lastMemDrawTs>66){ drawMemory(); lastMemDrawTs=ts; }
+  if(ts-lastRegDraw>100){ updateRegs(); lastRegDraw=ts; }
+  renderQueue(); updateStatus();
+  $("clock").textContent=hex(pc);
+  $("inscount").textContent=clockCount;
+  updateTopo();
+  requestAnimationFrame(frame);
+}
+
+// ===================== 引导 / 复位 / 样例 =====================
+const HELLO_SRC = `main:
+LUI x5, 13
+ADDI x6, x0, 72
+SB x6, 0(x5)
+ADDI x6, x0, 101
+SB x6, 1(x5)
+ADDI x6, x0, 108
+SB x6, 2(x5)
+ADDI x6, x0, 108
+SB x6, 3(x5)
+ADDI x6, x0, 111
+SB x6, 4(x5)
+ADDI x6, x0, 44
+SB x6, 5(x5)
+ADDI x6, x0, 32
+SB x6, 6(x5)
+ADDI x6, x0, 68
+SB x6, 7(x5)
+ADDI x6, x0, 79
+SB x6, 8(x5)
+ADDI x6, x0, 71
+SB x6, 9(x5)
+ADDI x6, x0, 33
+SB x6, 10(x5)
+ADDI x6, x5, 11
+ECALL x5, x6
+JALR x0, x27, 0
+`;
+const LOOP_SRC = `main:
+LUI x5, 13
+ADDI x28, x5, 0
+ADDI x6, x0, 48
+ADDI x7, x0, 58
+loop:
+SB x6, 0(x5)
+ADDI x5, x5, 1
+ADDI x6, x6, 1
+BNE x6, x7, loop
+ADDI x29, x28, 10
+ECALL x28, x29
+JALR x0, x27, 0
+`;
+const CALC_SRC = `main:
+ADDI x5, x0, 12
+ADDI x6, x0, 34
+MUL x7, x5, x6
+ADDI x10, x7, 0
+PRINT x10
+ADDI x5, x0, 100
+ADDI x6, x0, 7
+DIVU x7, x5, x6
+ADDI x10, x7, 0
+PRINT x10
+JALR x0, x27, 0
+`;
+const FIB_SRC = `main:
+ADDI x10, x0, 10
+JAL x1, fib
+ADDI x10, x10, 0
+PRINT x10
+JALR x0, x27, 0
+fib:
+ADDI x2, x2, -24
+SW x1, 0(x2)
+SW x8, 4(x2)
+SW x9, 8(x2)
+ADDI x8, x10, 0
+ADDI x5, x0, 2
+BLT x8, x5, fib_base
+ADDI x10, x8, -1
+JAL x1, fib
+ADDI x9, x10, 0
+ADDI x10, x8, -2
+JAL x1, fib
+ADD x10, x10, x9
+JAL x0, fib_ret
+fib_base:
+ADDI x10, x8, 0
+fib_ret:
+LW x9, 8(x2)
+LW x8, 4(x2)
+LW x1, 0(x2)
+ADDI x2, x2, 24
+JALR x0, x1, 0
+`;
+const GCD_SRC = `main:
+ADDI x10, x0, 252
+ADDI x11, x0, 105
+JAL x1, gcd
+ADDI x10, x10, 0
+PRINT x10
+JALR x0, x27, 0
+gcd:
+BEQ x11, x0, gcd_done
+gcd_loop:
+BEQ x10, x11, gcd_done
+BLT x10, x11, gcd_sub_b
+SUB x10, x10, x11
+JAL x0, gcd_loop
+gcd_sub_b:
+SUB x11, x11, x10
+JAL x0, gcd_loop
+gcd_done:
+JALR x0, x1, 0
+`;
+const PRIMES_SRC = `main:
+ADDI x8, x0, 2
+next_n:
+ADDI x5, x0, 30
+BGE x8, x5, exit
+ADDI x9, x0, 2
+ADDI x18, x0, 1
+try_div:
+BLT x9, x8, check
+JAL x0, after
+check:
+REMU x28, x8, x9
+BEQ x28, x0, not_prime
+ADDI x9, x9, 1
+JAL x0, try_div
+not_prime:
+ADDI x18, x0, 0
+after:
+BEQ x18, x0, skip
+ADDI x10, x8, 0
+PRINT x10
+skip:
+ADDI x8, x8, 1
+JAL x0, next_n
+exit:
+JALR x0, x27, 0
+`;
+const ASK_SRC = `main:
+LUI x5, 13
+ADDI x6, x0, 78
+SB x6, 0(x5)
+ADDI x6, x0, 65
+SB x6, 1(x5)
+ADDI x6, x0, 77
+SB x6, 2(x5)
+ADDI x6, x0, 69
+SB x6, 3(x5)
+ADDI x6, x0, 62
+SB x6, 4(x5)
+ADDI x6, x0, 32
+SB x6, 5(x5)
+ADDI x6, x5, 6
+ECALL x5, x6
+LUI x7, 14
+SW x0, 0(x7)
+wait:
+LW x8, 0(x7)
+BEQ x8, x0, wait
+LW x9, 4(x7)
+ADDI x10, x7, 16
+ADD x11, x10, x9
+ECALL x10, x11
+JALR x0, x27, 0
+`;
+const README_TEXT = `DOG Computer Quick Reference (built-in)
+=========================================
+A DOS-like toy computer with an RV32I core.
+
+Commands:
+  FIND name       list files (? and * wildcards)
+  RENAME old new  rename a file
+  BUILD name      create an empty file
+  DELETE name     delete a file
+  OPEN name       open a file for editing (Esc saves)
+  CODE src        compile source -> C-src (binary)
+  RUN C-name      run a compiled binary
+  CLEAR           clear screen
+
+Assembly is left-aligned; only RV32I instructions
+plus built-in functions are allowed:
+  ECALL start, end      display memory [start,end)
+  TRANS start, end, dst copy memory [start,end) to dst
+  PRINT reg             display a decimal number
+  MUL / DIVU / REMU     software integer routines
+
+Registers are x0..x31 (or 0..31). x1=ra, x2=sp,
+x27 = system return address, x10/x11 = args.
+main returns via JALR x0, x27, 0.
+
+Try:
+  FIND *
+  CODE ASK      then  RUN C-ASK      (asks your name)
+  CODE FIB      then  RUN C-FIB      (-> 55)
+  CODE PRIMES   then  RUN C-PRIMES   (primes < 30)
+`;
+const NOTES_TEXT = `Study notes
+============
+1. The interrupt controller is a serial-to-parallel
+   converter: keyboard bits become an 8-bit code.
+2. Printable keys share one ISR; control keys each
+   have their own ISR.
+3. ECALL start,end renders a memory range to the
+   workspace; TRANS copies a range without rendering.
+4. A function call = pass args + JAL + return
+   address; the stack saves the caller context.
+5. A running program is still in shell mode: typed
+   chars go to the workspace, and Enter captures
+   them into the input buffer at 0xE010.
+(Edit this text freely, then press Esc to save.)
+`;
+function seedFiles(){
+  const examples=[["HELLO",HELLO_SRC],["LOOP",LOOP_SRC],["CALC",CALC_SRC],["FIB",FIB_SRC],["GCD",GCD_SRC],["PRIMES",PRIMES_SRC],["ASK",ASK_SRC]];
+  for(const [name,src] of examples){
+    storeFile(name, strBytes(src), "T");
+    const res=assemble(src, CODE_BASE, {__os_mul:osSymbols.__os_mul, __os_divu:osSymbols.__os_divu, __os_print_int:osSymbols.__os_print_int});
+    if(!res.errors.length){
+      const bin=new Uint8Array(res.bytes.length+4); bin.set(res.bytes);
+      bin[bin.length-4]=res.textLen&0xff; bin[bin.length-3]=(res.textLen>>>8)&0xff;
+      bin[bin.length-2]=(res.textLen>>>16)&0xff; bin[bin.length-1]=(res.textLen>>>24)&0xff;
+      storeFile("C-"+name, bin, "B");
+    }
+  }
+  storeFile("README", strBytes(README_TEXT), "T");
+  storeFile("NOTES", strBytes(NOTES_TEXT), "T");
+}
+function initialize(){
+  ram.fill(0); reg.fill(0); diskSectors.clear();
+  ramAge.fill(0); ramType.fill(0);
+  sectorAge.fill(0); sectorType.fill(0);
+  sectorUsed.fill(0); sectorUsed[0]=sectorUsed[1]=1;
+  directory=[]; queue=[];
+  clockCount=0; accessClock=0; lastMemDraw=-1; lastRenderLen=-1;
+  pc=0; mode="shell"; workspace=""; fileContent=""; cursor=0; displayZero=0;
+  currentFile=null; slices=[]; pieceOriginal=""; pieceAdd=""; pieces=[]; execMode="boot"; userExit=null;
+  // 1) 汇编“系统程序”（空闲循环 + 中断程序 + 软件乘除法），放在 OS 区 0x9000
+  const sys=assemble(SYS_SRC, OS_BASE, {});
+  if(sys.errors.length) logMem("err", "系统程序汇编错误: "+sys.errors.join("; "));
+  osSymbols={ __idle:sys.symbols.__idle, __os_mul:sys.symbols.__os_mul, __os_divu:sys.symbols.__os_divu, __os_print_int:sys.symbols.__os_print_int };
+  intAddrs={ printable:sys.symbols.__int_printable, enter:sys.symbols.__int_enter, back:sys.symbols.__int_back,
+    esc:sys.symbols.__int_esc, left:sys.symbols.__int_left, right:sys.symbols.__int_right, up:sys.symbols.__int_up,
+    down:sys.symbols.__int_down, pgup:sys.symbols.__int_pgup, pgdn:sys.symbols.__int_pgdn };
+  IDLE_ADDR=(sys.symbols.__idle>>>0);
+  // 2) 汇编引导程序（PROM 0x0000），并把系统镜像固化到 ROM_IMAGE
+  const boot=assemble(bootSource(sys.bytes.length), ROM_BASE, { __idle: sys.symbols.__idle });
+  if(boot.errors.length) logMem("err", "引导程序汇编错误: "+boot.errors.join("; "));
+  writeBytesBulk(ROM_BASE, boot.bytes, true);       // PROM 熔丝：引导程序
+  writeBytesBulk(ROM_IMAGE, sys.bytes, true);       // PROM 熔丝：系统镜像
+  reg[2]=SP_INIT; pc=0; intrReturn=IDLE_ADDR;
+  serializeDir();
+  logMemEnabled=false;
+  seedFiles();
+  logMemEnabled=true;
+  logMem("sys", `PROM 熔丝载入 RAM：引导程序 ${hex(ROM_BASE)}，系统镜像 ${hex(ROM_IMAGE)}（${sys.bytes.length}B）`);
+  logMem("sys", `上电：时钟置零，PC=${hex(pc)}，开始执行引导程序`);
+  logMem("sys", `引导将把系统镜像搬到 ${hex(OS_BASE)}，初始化状态寄存器，再跳到空闲循环 ${hex(IDLE_ADDR)}`);
+  logMem("sys", "就绪后 CODE 源文件 再 RUN C-源文件（C-* 二进制已预编译）；FIND * 看目录");
+  renderDisplay();
+}
+function powerOn(){ powered=true; running=true; initialize(); }
+function powerOff(){ powered=false; running=false; $("powerLed").className="led"; mctx.fillStyle="#04070a"; mctx.fillRect(0,0,monitor.width,monitor.height); }
+function reset(){ running=true; initialize(); }
+
+// ===================== 键盘输入 → 中断队列 =====================
+function keyCodeFor(ev){
+  switch(ev.key){
+    case "Enter": return KEY.ENTER;
+    case "Backspace": return KEY.BACK;
+    case "Escape": return KEY.ESC;
+    case "ArrowLeft": return KEY.LEFT;
+    case "ArrowRight": return KEY.RIGHT;
+    case "ArrowUp": return KEY.UP;
+    case "ArrowDown": return KEY.DOWN;
+    case "PageUp": return KEY.PGUP;
+    case "PageDown": return KEY.PGDN;
+  }
+  if(ev.key.length===1){ const c=ev.key.charCodeAt(0); if(c>=0x20 && c<=0x7e) return c; }
+  return null;
+}
+
+// ===================== 事件 / 悬停 =====================
+$("kbd").addEventListener("keydown", ev=>{
+  if(!powered){ return; }
+  const code=keyCodeFor(ev);
+  if(code===null) return;
+  ev.preventDefault();
+  kbdFlash=12;
+  queue.push({code});
+  logMem("sys", `键盘 → 中断处理器：收到 ${keyLabel(code)} 0x${code.toString(16).toUpperCase().padStart(2,"0")}`);
+  renderQueue();
+});
+ramCanvas.addEventListener("mousemove", ev=>{
+  const p=canvasPoint(ramCanvas,ev), c=Math.floor(p.x/(ramCanvas.width/128)), r=Math.floor(p.y/(ramCanvas.height/128));
+  const idx=r*128+c, a=idx<<2;
+  if(a>=0 && a<RAM_SIZE) $("memTip").textContent=`RAM ${hex(a)} · ${regionName(a)} · [${hex(ram[a],2)} ${hex(ram[a+1],2)} ${hex(ram[a+2],2)} ${hex(ram[a+3],2)}]`;
+});
+ramCanvas.addEventListener("mouseleave",()=>$("memTip").textContent="把鼠标移到色块上查看地址");
+diskCanvas.addEventListener("mousemove", ev=>{
+  const p=canvasPoint(diskCanvas,ev), s=Math.floor(p.x/(diskCanvas.width/DISK_VIEW_SECTORS));
+  if(s>=0 && s<DISK_VIEW_SECTORS){
+    const f=directory.filter(e=>e&&e.sectors.includes(s)).map(e=>e.name).join(",");
+    $("memTip").textContent=`扇区 ${s} (0x${(DISK_BASE+s*SECTOR_SIZE).toString(16).toUpperCase()}) · ${s<DIR_SECTORS?"目录表":sectorUsed[s]?"已占用":"空闲"}${f?" · 文件:"+f:""}`;
+  }
+});
+diskCanvas.addEventListener("mouseleave",()=>$("memTip").textContent="把鼠标移到色块上查看地址");
+
+$("btnPower").addEventListener("click",()=>{
+  if(powered){ powerOff(); $("btnPower").textContent="上电"; $("btnPower").classList.remove("danger"); }
+  else { powerOn(); $("btnPower").textContent="断电"; $("btnPower").classList.add("danger"); $("powerLed").className="led on"; $("btnRun").textContent="暂停"; $("btnRun").classList.add("primary"); }
+});
+$("btnRun").addEventListener("click",()=>{ if(!powered) return; running=!running; $("btnRun").textContent=running?"暂停":"运行"; $("btnRun").classList.toggle("primary",running); });
+$("btnStep").addEventListener("click",()=>{
+  if(!powered) return;
+  manualStep();
+});
+$("btnReset").addEventListener("click",()=>{ powered=true; reset(); $("btnPower").textContent="断电"; $("btnPower").classList.add("danger"); $("powerLed").className="led on"; $("btnRun").textContent="暂停"; $("btnRun").classList.add("primary"); });
+$("speed").addEventListener("input",ev=>{ speedVal=+ev.target.value; $("speedLabel").textContent=SPEED_LABEL[speedVal]; });
+
+// ===================== 启动 =====================
+$("speedLabel").textContent=SPEED_LABEL[speedVal];
+$("btnRun").classList.add("primary"); running=true;
+updateRegs(); drawMemory();
+powerOn();
+requestAnimationFrame(frame);
+// ===================== 拓扑图 =====================
+const TOPO = `
+<defs>
+  <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+    <path d="M0,0 L10,5 L0,10 z" fill="#3b5168"/>
+  </marker>
+</defs>
+<line id="l-kbd-irq" class="tlink" x1="82" y1="66" x2="82" y2="126"/>
+<line id="l-irq-cpu" class="tlink" x1="100" y1="156" x2="116" y2="156"/>
+<line id="l-cpu-mon" class="tlink" x1="238" y1="128" x2="250" y2="46"/>
+<line id="l-cpu-disk" class="tlink" x1="178" y1="216" x2="262" y2="204"/>
+<line id="l-cpu-ram" class="tlink" x1="172" y1="150" x2="172" y2="162"/>
+
+<rect id="n-kbd" class="tnode" x="12" y="24" width="70" height="42" rx="5"/>
+<text class="tlabel" x="47" y="42">键盘</text>
+<text class="tsub" x="47" y="56">双线串口</text>
+
+<rect id="n-irq" class="tnode" x="12" y="130" width="88" height="52" rx="5"/>
+<text class="tlabel" x="56" y="150">中断处理器</text>
+<text class="tsub" x="56" y="164">队列·解码·仲裁</text>
+
+<rect id="n-cpu" class="tnode" x="118" y="94" width="120" height="126" rx="6"/>
+<text class="tlabel" x="178" y="112">微处理器</text>
+<text class="tsub" x="178" y="126">RV32I · PC · ALU</text>
+<rect id="n-ram" class="tnode" x="128" y="132" width="44" height="24" rx="3"/>
+<text class="tsub" x="150" y="147">RAM</text>
+<text class="tsub" x="178" y="196">译码·寄存器·</text>
+<text class="tsub" x="178" y="208">移位·中断</text>
+
+<rect id="n-mon" class="tnode" x="252" y="20" width="60" height="46" rx="5"/>
+<text class="tlabel" x="282" y="38">显示器</text>
+<text class="tsub" x="282" y="52">64×25</text>
+
+<rect id="n-disk" class="tnode" x="252" y="180" width="60" height="46" rx="5"/>
+<text class="tlabel" x="282" y="198">硬盘</text>
+<text class="tsub" x="282" y="212">FAT·扇区</text>
+`;
+function renderTopology(){ $("topoSvg").innerHTML=TOPO; }
+let kbdFlash=0, irqFlash=0, cpuFlash=0;
+function setLive(sel,on){ const e=$("topoSvg").querySelector(sel); if(e) e.classList.toggle("live",on); }
+function recentDisk(){ let mx=0; for(let i=0;i<DISK_VIEW_SECTORS;i++){ if(sectorAge[i]>mx) mx=sectorAge[i]; } return heatTick-mx<HEAT_FRAMES; }
+function recentVRAM(){ return heatTick-(ramAge[VRAM_BASE]||0)<HEAT_FRAMES; }
+function updateTopo(){
+  const busy = execMode!=="idle";
+  setLive("#n-kbd", kbdFlash>0);
+  setLive("#n-irq", queue.length>0 || irqFlash>0);
+  setLive("#n-cpu", busy || cpuFlash>0);
+  setLive("#n-ram", busy);
+  setLive("#n-mon", recentVRAM());
+  setLive("#n-disk", recentDisk());
+  setLive("#l-kbd-irq", kbdFlash>0);
+  setLive("#l-irq-cpu", queue.length>0 || irqFlash>0);
+  setLive("#l-cpu-mon", recentVRAM());
+  setLive("#l-cpu-disk", recentDisk());
+  setLive("#l-cpu-ram", busy);
+}
+renderTopology();
+$("btnPower").textContent="断电"; $("btnPower").classList.add("danger"); $("powerLed").className="led on";
+$("btnRun").textContent="暂停";
+</script>
+</body>
+</html>
